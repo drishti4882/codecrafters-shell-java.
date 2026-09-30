@@ -81,16 +81,20 @@ public class Main {
       List<String> tokens = parse(scanner.nextLine());
       if (tokens.isEmpty()) continue;
 
-      // ---- pull out "> file", "1> file", "2> file" ----
+      // ---- pull out >, 1>, >>, 1>>, 2>, 2>> ----
       File outFile = null;
       File errFile = null;
+      boolean outAppend = false;
+      boolean errAppend = false;
       List<String> cmd = new ArrayList<>();
       for (int i = 0; i < tokens.size(); i++) {
         String t = tokens.get(i);
         boolean hasNext = i + 1 < tokens.size();
-        if (hasNext && (t.equals(">") || t.equals("1>"))) {
+        if (hasNext && (t.equals(">") || t.equals("1>") || t.equals(">>") || t.equals("1>>"))) {
+          outAppend = t.endsWith(">>");
           outFile = cwd.resolve(tokens.get(++i)).toFile();
-        } else if (hasNext && t.equals("2>")) {
+        } else if (hasNext && (t.equals("2>") || t.equals("2>>"))) {
+          errAppend = t.equals("2>>");
           errFile = cwd.resolve(tokens.get(++i)).toFile();
         } else {
           cmd.add(t);
@@ -100,8 +104,8 @@ public class Main {
 
       PrintStream out = System.out;
       PrintStream err = System.err;
-      if (outFile != null) out = new PrintStream(new FileOutputStream(outFile), true);
-      if (errFile != null) err = new PrintStream(new FileOutputStream(errFile), true);
+      if (outFile != null) out = new PrintStream(new FileOutputStream(outFile, outAppend), true);
+      if (errFile != null) err = new PrintStream(new FileOutputStream(errFile, errAppend), true);
 
       String name = cmd.get(0);
       List<String> argv = cmd.subList(1, cmd.size());
@@ -143,10 +147,10 @@ public class Main {
             pb.directory(cwd.toFile());
             pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
             pb.redirectOutput(outFile != null
-                ? ProcessBuilder.Redirect.appendTo(outFile)  // already truncated above
+                ? ProcessBuilder.Redirect.appendTo(outFile)
                 : ProcessBuilder.Redirect.INHERIT);
             pb.redirectError(errFile != null
-                ? ProcessBuilder.Redirect.appendTo(errFile)  // already truncated above
+                ? ProcessBuilder.Redirect.appendTo(errFile)
                 : ProcessBuilder.Redirect.INHERIT);
             pb.start().waitFor();
           } else {
