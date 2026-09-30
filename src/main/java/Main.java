@@ -36,6 +36,11 @@ public class Main {
       } else if (inDouble) {
         if (c == '"') inDouble = false;
         else cur.append(c);
+      } else if (c == '\\') {
+        if (i + 1 < s.length()) {
+          cur.append(s.charAt(++i));
+        }
+        inToken = true;
       } else if (c == '\'') {
         inSingle = true;
         inToken = true;
