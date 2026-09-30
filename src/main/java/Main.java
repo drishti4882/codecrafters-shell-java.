@@ -1,4 +1,4 @@
-import java.io.File;
+]import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -43,7 +43,12 @@ public class Main {
 
       if (command.equals("cd") || command.startsWith("cd ")) {
         String target = command.length() > 2 ? command.substring(3).trim() : "";
-        Path p = cwd.resolve(target).normalize();
+        String expanded = target;
+        if (target.equals("~") || target.startsWith("~/")) {
+          String home = System.getenv("HOME");
+          expanded = (home == null ? "" : home) + target.substring(1);
+        }
+        Path p = cwd.resolve(expanded).normalize();
         if (Files.isDirectory(p)) {
           cwd = p;
         } else {
