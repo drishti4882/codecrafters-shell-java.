@@ -1,4 +1,5 @@
 import java.io.File;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
@@ -7,7 +8,7 @@ import java.util.Scanner;
 import java.util.Set;
 
 public class Main {
-  static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd");
+  static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd");
   static Path cwd = Paths.get("").toAbsolutePath();
 
   static String findInPath(String cmd) {
@@ -37,6 +38,17 @@ public class Main {
 
       if (command.equals("pwd")) {
         System.out.println(cwd);
+        continue;
+      }
+
+      if (command.equals("cd") || command.startsWith("cd ")) {
+        String target = command.length() > 2 ? command.substring(3).trim() : "";
+        Path p = Paths.get(target);
+        if (Files.isDirectory(p)) {
+          cwd = p.toAbsolutePath().normalize();
+        } else {
+          System.out.println("cd: " + target + ": No such file or directory");
+        }
         continue;
       }
 
