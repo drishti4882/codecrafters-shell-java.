@@ -6,6 +6,8 @@ public class Main {
     System.out.flush();
 
     Scanner scanner = new Scanner(System.in);
-    String input = scanner.nextLine();
+    String command = scanner.nextLine();
+
+    System.out.println(command + ": command not found");
   }
 }
