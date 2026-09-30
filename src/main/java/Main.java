@@ -10,19 +10,54 @@ import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
 public class Main {
-  static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd");
+  static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd", "history");
   static Path cwd = Paths.get("").toAbsolutePath();
+
+  static final List<String> history = new ArrayList<>();
+  static int historyWritten = 0;   // entries before this index are already on disk
 
   static class Cmd {
     List<String> args = new ArrayList<>();
     File out, err;
     boolean outApp, errApp;
+  }
+
+  // ---------- history helpers ----------
+  static void loadHistory(Path p) {
+    try {
+      for (String l : Files.readAllLines(p)) {
+        if (!l.isEmpty()) history.add(l);
+      }
+    } catch (IOException ignored) {
+    }
+  }
+
+  static void writeHistory(Path p, boolean append) {
+    try {
+      List<String> lines = append
+          ? history.subList(Math.min(historyWritten, history.size()), history.size())
+          : history;
+      if (append) {
+        Files.write(p, lines, StandardOpenOption.CREATE, StandardOpenOption.APPEND);
+      } else {
+        Files.write(p, lines, StandardOpenOption.CREATE,
+            StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+      }
+      historyWritten = history.size();
+    } catch (IOException ignored) {
+    }
+  }
+
+  static void saveOnExit() {
+    String hf = System.getenv("HISTFILE");
+    if (hf != null && !hf.isEmpty()) writeHistory(Paths.get(hf), false);
   }
 
   // ---------- terminal helpers ----------
@@ -40,11 +75,16 @@ public class Main {
     }
   }
 
+  static void redraw(StringBuilder buf) {
+    System.out.print("\r\u001b[K$ " + buf);
+  }
+
   static String readLine() throws IOException {
     stty("-icanon", "-echo", "min", "1");
     try {
       StringBuilder buf = new StringBuilder();
       boolean lastWasTab = false;
+      int pos = history.size();            // where the Up/Down cursor is
       while (true) {
         int ch = System.in.read();
         if (ch == -1) return buf.length() == 0 ? null : buf.toString();
@@ -60,6 +100,22 @@ public class Main {
           System.out.print("\r\n");
           System.out.flush();
           return buf.toString();
+        } else if (ch == 27) {             // escape sequence: ESC [ A / B
+          int b1 = System.in.read();
+          if (b1 == '[') {
+            int b2 = System.in.read();
+            if (b2 == 'A' && pos > 0) {    // Up
+              pos--;
+              buf.setLength(0);
+              buf.append(history.get(pos));
+              redraw(buf);
+            } else if (b2 == 'B' && pos < history.size()) {   // Down
+              pos++;
+              buf.setLength(0);
+              if (pos < history.size()) buf.append(history.get(pos));
+              redraw(buf);
+            }
+          }
         } else if (ch == 4) {
           if (buf.length() == 0) return null;
         } else if (ch == 127 || ch == 8) {
@@ -185,7 +241,6 @@ public class Main {
     return tokens;
   }
 
-  // Turns one segment's tokens into a Cmd (arguments + redirections).
   static Cmd extract(List<String> tokens) {
     Cmd c = new Cmd();
     for (int i = 0; i < tokens.size(); i++) {
@@ -232,6 +287,28 @@ public class Main {
           }
         }
       }
+      case "history" -> {
+        if (argv.size() >= 2 && argv.get(0).equals("-r")) {
+          loadHistory(cwd.resolve(argv.get(1)));
+        } else if (argv.size() >= 2 && argv.get(0).equals("-w")) {
+          writeHistory(cwd.resolve(argv.get(1)), false);
+        } else if (argv.size() >= 2 && argv.get(0).equals("-a")) {
+          writeHistory(cwd.resolve(argv.get(1)), true);
+        } else {
+          int start = 0;
+          if (!argv.isEmpty()) {
+            try {
+              start = Math.max(0, history.size() - Integer.parseInt(argv.get(0)));
+            } catch (NumberFormatException e) {
+              err.println("history: " + argv.get(0) + ": numeric argument required");
+              return;
+            }
+          }
+          for (int i = start; i < history.size(); i++) {
+            out.println(String.format("%5d  %s", i + 1, history.get(i)));
+          }
+        }
+      }
       default -> { } // "exit" is handled in main
     }
   }
@@ -248,7 +325,6 @@ public class Main {
       boolean last = i == n - 1;
       String name = c.args.get(0);
 
-      // create / truncate redirect targets up front
       if (c.out != null) new FileOutputStream(c.out, c.outApp).close();
       if (c.err != null) new FileOutputStream(c.err, c.errApp).close();
 
@@ -330,16 +406,24 @@ public class Main {
   }
 
   public static void main(String[] args) throws Exception {
+    String hf = System.getenv("HISTFILE");
+    if (hf != null && !hf.isEmpty()) {
+      loadHistory(Paths.get(hf));
+      historyWritten = history.size();
+    }
+
     while (true) {
       System.out.print("$ ");
       System.out.flush();
 
       String line = readLine();
       if (line == null) break;
+      if (line.trim().isEmpty()) continue;
+      history.add(line);
+
       List<String> tokens = parse(line);
       if (tokens.isEmpty()) continue;
 
-      // split on "|"
       List<Cmd> cmds = new ArrayList<>();
       List<String> seg = new ArrayList<>();
       for (String t : tokens) {
@@ -357,11 +441,13 @@ public class Main {
       if (bad) continue;
 
       if (cmds.size() == 1 && cmds.get(0).args.get(0).equals("exit")) {
+        saveOnExit();
         System.exit(0);
       }
 
       runPipeline(cmds);
       System.out.flush();
     }
+    saveOnExit();
   }
 }
