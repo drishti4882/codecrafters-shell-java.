@@ -15,9 +15,14 @@ public class Main {
   static Path cwd = Paths.get("").toAbsolutePath();
 
   // ---------- terminal helpers ----------
-  static void stty(String flags) {
+  // stty inherits our stdin, so it talks to the same terminal the tester gave us.
+  static void stty(String... flags) {
     try {
-      new ProcessBuilder("/bin/sh", "-c", "stty " + flags + " < /dev/tty")
+      List<String> c = new ArrayList<>();
+      c.add("stty");
+      c.addAll(List.of(flags));
+      new ProcessBuilder(c)
+          .redirectInput(ProcessBuilder.Redirect.INHERIT)
           .redirectOutput(ProcessBuilder.Redirect.DISCARD)
           .redirectError(ProcessBuilder.Redirect.DISCARD)
           .start().waitFor();
@@ -27,7 +32,7 @@ public class Main {
 
   // Returns the typed line, or null at end of input.
   static String readLine() throws IOException {
-    stty("-icanon -echo min 1");
+    stty("-icanon", "-echo", "min", "1");
     try {
       StringBuilder buf = new StringBuilder();
       while (true) {
@@ -35,7 +40,7 @@ public class Main {
         if (ch == -1) return buf.length() == 0 ? null : buf.toString();
 
         if (ch == '\n' || ch == '\r') {
-          System.out.print("\n");
+          System.out.print("\r\n");
           System.out.flush();
           return buf.toString();
         } else if (ch == 4) {                       // Ctrl+D
@@ -54,7 +59,7 @@ public class Main {
         System.out.flush();
       }
     } finally {
-      stty("icanon echo");
+      stty("icanon", "echo");
     }
   }
 
