@@ -1,8 +1,19 @@
+import java.io.File;
 import java.util.Scanner;
 import java.util.Set;
 
 public class Main {
   static final Set<String> BUILTINS = Set.of("echo", "exit", "type");
+
+  static String findInPath(String cmd) {
+    String path = System.getenv("PATH");
+    if (path == null) return null;
+    for (String dir : path.split(File.pathSeparator)) {
+      File f = new File(dir, cmd);
+      if (f.isFile() && f.canExecute()) return f.getAbsolutePath();
+    }
+    return null;
+  }
 
   public static void main(String[] args) throws Exception {
     Scanner scanner = new Scanner(System.in);
@@ -33,7 +44,12 @@ public class Main {
         if (BUILTINS.contains(arg)) {
           System.out.println(arg + " is a shell builtin");
         } else {
-          System.out.println(arg + ": not found");
+          String found = findInPath(arg);
+          if (found != null) {
+            System.out.println(arg + " is " + found);
+          } else {
+            System.out.println(arg + ": not found");
+          }
         }
         continue;
       }
