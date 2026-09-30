@@ -8,8 +8,12 @@ public class Main {
       System.out.print("$ ");
       System.out.flush();
 
-      if (!scanner.hasNextLine()) break;   // stop on Ctrl+D / end of input
-      String command = scanner.nextLine();
+      if (!scanner.hasNextLine()) break;
+      String command = scanner.nextLine().trim();
+
+      if (command.equals("exit") || command.startsWith("exit ")) {
+        System.exit(0);
+      }
 
       System.out.println(command + ": command not found");
     }
