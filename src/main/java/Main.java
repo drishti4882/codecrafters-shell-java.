@@ -43,9 +43,9 @@ public class Main {
 
       if (command.equals("cd") || command.startsWith("cd ")) {
         String target = command.length() > 2 ? command.substring(3).trim() : "";
-        Path p = Paths.get(target);
+        Path p = cwd.resolve(target).normalize();
         if (Files.isDirectory(p)) {
-          cwd = p.toAbsolutePath().normalize();
+          cwd = p;
         } else {
           System.out.println("cd: " + target + ": No such file or directory");
         }
@@ -77,7 +77,6 @@ public class Main {
         continue;
       }
 
-      // ---- external program ----
       List<String> tokens = Arrays.asList(command.split("\\s+"));
       if (findInPath(tokens.get(0)) != null) {
         ProcessBuilder pb = new ProcessBuilder(tokens);
