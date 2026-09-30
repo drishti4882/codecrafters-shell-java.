@@ -2,7 +2,7 @@ import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
 import java.util.Set;
@@ -21,6 +21,35 @@ public class Main {
     return null;
   }
 
+  static List<String> parse(String s) {
+    List<String> tokens = new ArrayList<>();
+    StringBuilder cur = new StringBuilder();
+    boolean inToken = false;
+    boolean inSingle = false;
+
+    for (int i = 0; i < s.length(); i++) {
+      char c = s.charAt(i);
+      if (inSingle) {
+        if (c == '\'') inSingle = false;
+        else cur.append(c);
+      } else if (c == '\'') {
+        inSingle = true;
+        inToken = true;
+      } else if (Character.isWhitespace(c)) {
+        if (inToken) {
+          tokens.add(cur.toString());
+          cur.setLength(0);
+          inToken = false;
+        }
+      } else {
+        cur.append(c);
+        inToken = true;
+      }
+    }
+    if (inToken) tokens.add(cur.toString());
+    return tokens;
+  }
+
   public static void main(String[] args) throws Exception {
     Scanner scanner = new Scanner(System.in);
 
@@ -29,67 +58,53 @@ public class Main {
       System.out.flush();
 
       if (!scanner.hasNextLine()) break;
-      String command = scanner.nextLine().trim();
-      if (command.isEmpty()) continue;
+      List<String> tokens = parse(scanner.nextLine());
+      if (tokens.isEmpty()) continue;
 
-      if (command.equals("exit") || command.startsWith("exit ")) {
-        System.exit(0);
-      }
+      String name = tokens.get(0);
+      List<String> argv = tokens.subList(1, tokens.size());
 
-      if (command.equals("pwd")) {
-        System.out.println(cwd);
-        continue;
-      }
+      switch (name) {
+        case "exit" -> System.exit(0);
 
-      if (command.equals("cd") || command.startsWith("cd ")) {
-        String target = command.length() > 2 ? command.substring(3).trim() : "";
-        String expanded = target;
-        if (target.equals("~") || target.startsWith("~/")) {
-          String home = System.getenv("HOME");
-          expanded = (home == null ? "" : home) + target.substring(1);
+        case "pwd" -> System.out.println(cwd);
+
+        case "echo" -> System.out.println(String.join(" ", argv));
+
+        case "cd" -> {
+          String target = argv.isEmpty() ? "~" : argv.get(0);
+          String expanded = target;
+          if (target.equals("~") || target.startsWith("~/")) {
+            String home = System.getenv("HOME");
+            expanded = (home == null ? "" : home) + target.substring(1);
+          }
+          Path p = cwd.resolve(expanded).normalize();
+          if (Files.isDirectory(p)) cwd = p;
+          else System.out.println("cd: " + target + ": No such file or directory");
         }
-        Path p = cwd.resolve(expanded).normalize();
-        if (Files.isDirectory(p)) {
-          cwd = p;
-        } else {
-          System.out.println("cd: " + target + ": No such file or directory");
-        }
-        continue;
-      }
 
-      if (command.equals("echo")) {
-        System.out.println();
-        continue;
-      }
-
-      if (command.startsWith("echo ")) {
-        System.out.println(command.substring(5));
-        continue;
-      }
-
-      if (command.startsWith("type ")) {
-        String arg = command.substring(5).trim();
-        if (BUILTINS.contains(arg)) {
-          System.out.println(arg + " is a shell builtin");
-        } else {
-          String found = findInPath(arg);
-          if (found != null) {
-            System.out.println(arg + " is " + found);
-          } else {
-            System.out.println(arg + ": not found");
+        case "type" -> {
+          for (String a : argv) {
+            if (BUILTINS.contains(a)) {
+              System.out.println(a + " is a shell builtin");
+            } else {
+              String found = findInPath(a);
+              if (found != null) System.out.println(a + " is " + found);
+              else System.out.println(a + ": not found");
+            }
           }
         }
-        continue;
-      }
 
-      List<String> tokens = Arrays.asList(command.split("\\s+"));
-      if (findInPath(tokens.get(0)) != null) {
-        ProcessBuilder pb = new ProcessBuilder(tokens);
-        pb.directory(cwd.toFile());
-        pb.inheritIO();
-        pb.start().waitFor();
-      } else {
-        System.out.println(command + ": command not found");
+        default -> {
+          if (findInPath(name) != null) {
+            ProcessBuilder pb = new ProcessBuilder(tokens);
+            pb.directory(cwd.toFile());
+            pb.inheritIO();
+            pb.start().waitFor();
+          } else {
+            System.out.println(name + ": command not found");
+          }
+        }
       }
     }
   }
