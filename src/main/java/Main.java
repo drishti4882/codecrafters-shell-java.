@@ -15,7 +15,6 @@ public class Main {
   static Path cwd = Paths.get("").toAbsolutePath();
 
   // ---------- terminal helpers ----------
-  // stty inherits our stdin, so it talks to the same terminal the tester gave us.
   static void stty(String... flags) {
     try {
       List<String> c = new ArrayList<>();
@@ -35,9 +34,17 @@ public class Main {
     stty("-icanon", "-echo", "min", "1");
     try {
       StringBuilder buf = new StringBuilder();
+      boolean lastWasTab = false;
       while (true) {
         int ch = System.in.read();
         if (ch == -1) return buf.length() == 0 ? null : buf.toString();
+
+        if (ch == '\t') {
+          lastWasTab = complete(buf, lastWasTab);
+          System.out.flush();
+          continue;
+        }
+        lastWasTab = false;
 
         if (ch == '\n' || ch == '\r') {
           System.out.print("\r\n");
@@ -50,8 +57,6 @@ public class Main {
             buf.setLength(buf.length() - 1);
             System.out.print("\b \b");
           }
-        } else if (ch == '\t') {
-          complete(buf);
         } else {
           buf.append((char) ch);
           System.out.print((char) ch);
@@ -63,24 +68,65 @@ public class Main {
     }
   }
 
-  static void complete(StringBuilder buf) {
+  // Returns true if this Tab should count as "first Tab of an ambiguous match".
+  static boolean complete(StringBuilder buf, boolean lastWasTab) {
     String prefix = buf.toString();
-    if (prefix.contains(" ")) {                     // only complete the command name
+    if (prefix.contains(" ")) {                     // only the command name for now
       System.out.print("\u0007");
-      return;
+      return false;
     }
-    Set<String> matches = new TreeSet<>();
+
+    TreeSet<String> matches = new TreeSet<>();
     for (String b : BUILTINS) {
       if (b.startsWith(prefix)) matches.add(b);
     }
+    String path = System.getenv("PATH");
+    if (path != null) {
+      for (String dir : path.split(File.pathSeparator)) {
+        File[] files = new File(dir).listFiles();
+        if (files == null) continue;
+        for (File f : files) {
+          if (f.getName().startsWith(prefix) && f.isFile() && f.canExecute()) {
+            matches.add(f.getName());
+          }
+        }
+      }
+    }
+
+    if (matches.isEmpty()) {
+      System.out.print("\u0007");
+      return false;
+    }
+
     if (matches.size() == 1) {
-      String full = matches.iterator().next();
-      String rest = full.substring(prefix.length()) + " ";
+      String rest = matches.first().substring(prefix.length()) + " ";
       buf.append(rest);
       System.out.print(rest);
-    } else {
-      System.out.print("\u0007");                   // bell
+      return false;
     }
+
+    // several matches: try the longest common prefix first
+    String lcp = matches.first();
+    for (String m : matches) {
+      int k = 0;
+      while (k < lcp.length() && k < m.length() && lcp.charAt(k) == m.charAt(k)) k++;
+      lcp = lcp.substring(0, k);
+    }
+    if (lcp.length() > prefix.length()) {
+      String rest = lcp.substring(prefix.length());
+      buf.append(rest);
+      System.out.print(rest);
+      return false;
+    }
+
+    if (!lastWasTab) {                              // first Tab: bell
+      System.out.print("\u0007");
+      return true;
+    }
+    // second Tab: list the matches, then redraw the prompt and buffer
+    System.out.print("\r\n" + String.join("  ", matches) + "\r\n");
+    System.out.print("$ " + buf);
+    return false;
   }
 
   // ---------- shell ----------
