@@ -34,8 +34,14 @@ public class Main {
         if (c == '\'') inSingle = false;
         else cur.append(c);
       } else if (inDouble) {
-        if (c == '"') inDouble = false;
-        else cur.append(c);
+        if (c == '"') {
+          inDouble = false;
+        } else if (c == '\\' && i + 1 < s.length()
+            && "\\\"$`".indexOf(s.charAt(i + 1)) >= 0) {
+          cur.append(s.charAt(++i));
+        } else {
+          cur.append(c);
+        }
       } else if (c == '\\') {
         if (i + 1 < s.length()) {
           cur.append(s.charAt(++i));
@@ -91,33 +97,3 @@ public class Main {
             expanded = (home == null ? "" : home) + target.substring(1);
           }
           Path p = cwd.resolve(expanded).normalize();
-          if (Files.isDirectory(p)) cwd = p;
-          else System.out.println("cd: " + target + ": No such file or directory");
-        }
-
-        case "type" -> {
-          for (String a : argv) {
-            if (BUILTINS.contains(a)) {
-              System.out.println(a + " is a shell builtin");
-            } else {
-              String found = findInPath(a);
-              if (found != null) System.out.println(a + " is " + found);
-              else System.out.println(a + ": not found");
-            }
-          }
-        }
-
-        default -> {
-          if (findInPath(name) != null) {
-            ProcessBuilder pb = new ProcessBuilder(tokens);
-            pb.directory(cwd.toFile());
-            pb.inheritIO();
-            pb.start().waitFor();
-          } else {
-            System.out.println(name + ": command not found");
-          }
-        }
-      }
-    }
-  }
-}
