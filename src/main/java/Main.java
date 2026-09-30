@@ -1,4 +1,6 @@
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -79,15 +81,33 @@ public class Main {
       List<String> tokens = parse(scanner.nextLine());
       if (tokens.isEmpty()) continue;
 
-      String name = tokens.get(0);
-      List<String> argv = tokens.subList(1, tokens.size());
+      // ---- pull out "> file" / "1> file" ----
+      File outFile = null;
+      List<String> cmd = new ArrayList<>();
+      for (int i = 0; i < tokens.size(); i++) {
+        String t = tokens.get(i);
+        if ((t.equals(">") || t.equals("1>")) && i + 1 < tokens.size()) {
+          outFile = cwd.resolve(tokens.get(++i)).toFile();
+        } else {
+          cmd.add(t);
+        }
+      }
+      if (cmd.isEmpty()) continue;
+
+      PrintStream out = System.out;
+      if (outFile != null) {
+        out = new PrintStream(new FileOutputStream(outFile), true); // creates/truncates
+      }
+
+      String name = cmd.get(0);
+      List<String> argv = cmd.subList(1, cmd.size());
 
       switch (name) {
         case "exit" -> System.exit(0);
 
-        case "pwd" -> System.out.println(cwd);
+        case "pwd" -> out.println(cwd);
 
-        case "echo" -> System.out.println(String.join(" ", argv));
+        case "echo" -> out.println(String.join(" ", argv));
 
         case "cd" -> {
           String target = argv.isEmpty() ? "~" : argv.get(0);
@@ -104,26 +124,32 @@ public class Main {
         case "type" -> {
           for (String a : argv) {
             if (BUILTINS.contains(a)) {
-              System.out.println(a + " is a shell builtin");
+              out.println(a + " is a shell builtin");
             } else {
               String found = findInPath(a);
-              if (found != null) System.out.println(a + " is " + found);
-              else System.out.println(a + ": not found");
+              if (found != null) out.println(a + " is " + found);
+              else out.println(a + ": not found");
             }
           }
         }
 
         default -> {
           if (findInPath(name) != null) {
-            ProcessBuilder pb = new ProcessBuilder(tokens);
+            ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.directory(cwd.toFile());
-            pb.inheritIO();
+            pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
+            pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+            pb.redirectOutput(outFile != null
+                ? ProcessBuilder.Redirect.appendTo(outFile) // file already truncated above
+                : ProcessBuilder.Redirect.INHERIT);
             pb.start().waitFor();
           } else {
             System.out.println(name + ": command not found");
           }
         }
       }
+
+      if (outFile != null) out.close();
     }
   }
 }
