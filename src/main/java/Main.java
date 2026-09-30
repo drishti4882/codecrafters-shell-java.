@@ -1,11 +1,14 @@
 import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Scanner;
 import java.util.Set;
 
 public class Main {
-  static final Set<String> BUILTINS = Set.of("echo", "exit", "type");
+  static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd");
+  static Path cwd = Paths.get("").toAbsolutePath();
 
   static String findInPath(String cmd) {
     String path = System.getenv("PATH");
@@ -30,6 +33,11 @@ public class Main {
 
       if (command.equals("exit") || command.startsWith("exit ")) {
         System.exit(0);
+      }
+
+      if (command.equals("pwd")) {
+        System.out.println(cwd);
+        continue;
       }
 
       if (command.equals("echo")) {
@@ -61,6 +69,7 @@ public class Main {
       List<String> tokens = Arrays.asList(command.split("\\s+"));
       if (findInPath(tokens.get(0)) != null) {
         ProcessBuilder pb = new ProcessBuilder(tokens);
+        pb.directory(cwd.toFile());
         pb.inheritIO();
         pb.start().waitFor();
       } else {
