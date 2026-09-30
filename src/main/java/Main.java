@@ -1,18 +1,84 @@
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Scanner;
 import java.util.Set;
+import java.util.TreeSet;
 
 public class Main {
   static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd");
   static Path cwd = Paths.get("").toAbsolutePath();
 
+  // ---------- terminal helpers ----------
+  static void stty(String flags) {
+    try {
+      new ProcessBuilder("/bin/sh", "-c", "stty " + flags + " < /dev/tty")
+          .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+          .redirectError(ProcessBuilder.Redirect.DISCARD)
+          .start().waitFor();
+    } catch (Exception ignored) {
+    }
+  }
+
+  // Returns the typed line, or null at end of input.
+  static String readLine() throws IOException {
+    stty("-icanon -echo min 1");
+    try {
+      StringBuilder buf = new StringBuilder();
+      while (true) {
+        int ch = System.in.read();
+        if (ch == -1) return buf.length() == 0 ? null : buf.toString();
+
+        if (ch == '\n' || ch == '\r') {
+          System.out.print("\n");
+          System.out.flush();
+          return buf.toString();
+        } else if (ch == 4) {                       // Ctrl+D
+          if (buf.length() == 0) return null;
+        } else if (ch == 127 || ch == 8) {          // Backspace
+          if (buf.length() > 0) {
+            buf.setLength(buf.length() - 1);
+            System.out.print("\b \b");
+          }
+        } else if (ch == '\t') {
+          complete(buf);
+        } else {
+          buf.append((char) ch);
+          System.out.print((char) ch);
+        }
+        System.out.flush();
+      }
+    } finally {
+      stty("icanon echo");
+    }
+  }
+
+  static void complete(StringBuilder buf) {
+    String prefix = buf.toString();
+    if (prefix.contains(" ")) {                     // only complete the command name
+      System.out.print("\u0007");
+      return;
+    }
+    Set<String> matches = new TreeSet<>();
+    for (String b : BUILTINS) {
+      if (b.startsWith(prefix)) matches.add(b);
+    }
+    if (matches.size() == 1) {
+      String full = matches.iterator().next();
+      String rest = full.substring(prefix.length()) + " ";
+      buf.append(rest);
+      System.out.print(rest);
+    } else {
+      System.out.print("\u0007");                   // bell
+    }
+  }
+
+  // ---------- shell ----------
   static String findInPath(String cmd) {
     String path = System.getenv("PATH");
     if (path == null) return null;
@@ -71,17 +137,15 @@ public class Main {
   }
 
   public static void main(String[] args) throws Exception {
-    Scanner scanner = new Scanner(System.in);
-
     while (true) {
       System.out.print("$ ");
       System.out.flush();
 
-      if (!scanner.hasNextLine()) break;
-      List<String> tokens = parse(scanner.nextLine());
+      String line = readLine();
+      if (line == null) break;
+      List<String> tokens = parse(line);
       if (tokens.isEmpty()) continue;
 
-      // ---- pull out >, 1>, >>, 1>>, 2>, 2>> ----
       File outFile = null;
       File errFile = null;
       boolean outAppend = false;
