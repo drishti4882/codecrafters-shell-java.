@@ -1,4 +1,6 @@
 import java.io.File;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Scanner;
 import java.util.Set;
 
@@ -24,6 +26,7 @@ public class Main {
 
       if (!scanner.hasNextLine()) break;
       String command = scanner.nextLine().trim();
+      if (command.isEmpty()) continue;
 
       if (command.equals("exit") || command.startsWith("exit ")) {
         System.exit(0);
@@ -54,7 +57,15 @@ public class Main {
         continue;
       }
 
-      System.out.println(command + ": command not found");
+      // ---- external program ----
+      List<String> tokens = Arrays.asList(command.split("\\s+"));
+      if (findInPath(tokens.get(0)) != null) {
+        ProcessBuilder pb = new ProcessBuilder(tokens);
+        pb.inheritIO();
+        pb.start().waitFor();
+      } else {
+        System.out.println(command + ": command not found");
+      }
     }
   }
 }
