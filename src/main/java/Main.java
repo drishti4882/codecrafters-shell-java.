@@ -97,3 +97,33 @@ public class Main {
             expanded = (home == null ? "" : home) + target.substring(1);
           }
           Path p = cwd.resolve(expanded).normalize();
+          if (Files.isDirectory(p)) cwd = p;
+          else System.out.println("cd: " + target + ": No such file or directory");
+        }
+
+        case "type" -> {
+          for (String a : argv) {
+            if (BUILTINS.contains(a)) {
+              System.out.println(a + " is a shell builtin");
+            } else {
+              String found = findInPath(a);
+              if (found != null) System.out.println(a + " is " + found);
+              else System.out.println(a + ": not found");
+            }
+          }
+        }
+
+        default -> {
+          if (findInPath(name) != null) {
+            ProcessBuilder pb = new ProcessBuilder(tokens);
+            pb.directory(cwd.toFile());
+            pb.inheritIO();
+            pb.start().waitFor();
+          } else {
+            System.out.println(name + ": command not found");
+          }
+        }
+      }
+    }
+  }
+}
