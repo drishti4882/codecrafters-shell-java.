@@ -81,13 +81,17 @@ public class Main {
       List<String> tokens = parse(scanner.nextLine());
       if (tokens.isEmpty()) continue;
 
-      // ---- pull out "> file" / "1> file" ----
+      // ---- pull out "> file", "1> file", "2> file" ----
       File outFile = null;
+      File errFile = null;
       List<String> cmd = new ArrayList<>();
       for (int i = 0; i < tokens.size(); i++) {
         String t = tokens.get(i);
-        if ((t.equals(">") || t.equals("1>")) && i + 1 < tokens.size()) {
+        boolean hasNext = i + 1 < tokens.size();
+        if (hasNext && (t.equals(">") || t.equals("1>"))) {
           outFile = cwd.resolve(tokens.get(++i)).toFile();
+        } else if (hasNext && t.equals("2>")) {
+          errFile = cwd.resolve(tokens.get(++i)).toFile();
         } else {
           cmd.add(t);
         }
@@ -95,9 +99,9 @@ public class Main {
       if (cmd.isEmpty()) continue;
 
       PrintStream out = System.out;
-      if (outFile != null) {
-        out = new PrintStream(new FileOutputStream(outFile), true); // creates/truncates
-      }
+      PrintStream err = System.err;
+      if (outFile != null) out = new PrintStream(new FileOutputStream(outFile), true);
+      if (errFile != null) err = new PrintStream(new FileOutputStream(errFile), true);
 
       String name = cmd.get(0);
       List<String> argv = cmd.subList(1, cmd.size());
@@ -118,7 +122,7 @@ public class Main {
           }
           Path p = cwd.resolve(expanded).normalize();
           if (Files.isDirectory(p)) cwd = p;
-          else System.out.println("cd: " + target + ": No such file or directory");
+          else err.println("cd: " + target + ": No such file or directory");
         }
 
         case "type" -> {
@@ -138,18 +142,23 @@ public class Main {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.directory(cwd.toFile());
             pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
-            pb.redirectError(ProcessBuilder.Redirect.INHERIT);
             pb.redirectOutput(outFile != null
-                ? ProcessBuilder.Redirect.appendTo(outFile) // file already truncated above
+                ? ProcessBuilder.Redirect.appendTo(outFile)  // already truncated above
+                : ProcessBuilder.Redirect.INHERIT);
+            pb.redirectError(errFile != null
+                ? ProcessBuilder.Redirect.appendTo(errFile)  // already truncated above
                 : ProcessBuilder.Redirect.INHERIT);
             pb.start().waitFor();
           } else {
-            System.out.println(name + ": command not found");
+            err.println(name + ": command not found");
           }
         }
       }
 
+      out.flush();
+      err.flush();
       if (outFile != null) out.close();
+      if (errFile != null) err.close();
     }
   }
 }
