@@ -17,6 +17,7 @@ public class Main {
     } catch (Exception ignored) {}
   }
 
+  // ---------- completion ----------
   static TreeSet<String> candidates(String prefix) {
     TreeSet<String> result = new TreeSet<>();
     for (String b : BUILTINS) {
@@ -32,6 +33,23 @@ public class Main {
             result.add(f.getName());
           }
         }
+      }
+    }
+    return result;
+  }
+
+  // Filenames in cwd (or in the typed directory part) starting with the typed word.
+  static TreeSet<String> fileCandidates(String word) {
+    TreeSet<String> result = new TreeSet<>();
+    int slash = word.lastIndexOf('/');
+    String dirPart = slash >= 0 ? word.substring(0, slash + 1) : "";
+    String namePart = word.substring(slash + 1);
+    File dir = dirPart.isEmpty() ? cwd.toFile() : cwd.resolve(dirPart).toFile();
+    File[] files = dir.listFiles();
+    if (files == null) return result;
+    for (File f : files) {
+      if (f.getName().startsWith(namePart)) {
+        result.add(dirPart + f.getName() + (f.isDirectory() ? "/" : ""));
       }
     }
     return result;
@@ -54,9 +72,15 @@ public class Main {
       if (ch == -1) return buf.length() == 0 ? null : buf.toString();
 
       if (ch == '\t') {
-        String prefix = buf.toString();
+        String full = buf.toString();
+        int sp = full.lastIndexOf(' ');
+        boolean isArg = sp >= 0;
+        String head = isArg ? full.substring(0, sp + 1) : "";   // text before the word being completed
+        String prefix = isArg ? full.substring(sp + 1) : full;   // the word being completed
         TreeSet<String> matches = new TreeSet<>();
-        if (!prefix.isEmpty() && !prefix.contains(" ")) {
+        if (isArg) {
+          matches = fileCandidates(prefix);
+        } else if (!prefix.isEmpty()) {
           matches = candidates(prefix);
         }
 
@@ -64,15 +88,17 @@ public class Main {
           System.out.print("\u0007");
           lastWasTab = false;
         } else if (matches.size() == 1) {
+          String m = matches.first();
           buf.setLength(0);
-          buf.append(matches.first()).append(' ');
+          buf.append(head).append(m);
+          if (!m.endsWith("/")) buf.append(' ');
           System.out.print("\r\u001b[K$ " + buf);
           lastWasTab = false;
         } else {
           String lcp = commonPrefix(matches);
           if (lcp.length() > prefix.length()) {
             buf.setLength(0);
-            buf.append(lcp);
+            buf.append(head).append(lcp);
             System.out.print("\r\u001b[K$ " + buf);
             lastWasTab = false;
           } else if (!lastWasTab) {
