@@ -1,13 +1,6 @@
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.PrintStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.TreeSet;
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
 
 public class Main {
   static final List<String> BUILTINS = List.of("cd", "echo", "exit", "pwd", "type");
@@ -24,7 +17,6 @@ public class Main {
     } catch (Exception ignored) {}
   }
 
-  // Builtins plus executables in PATH whose name starts with prefix (sorted, no duplicates).
   static TreeSet<String> candidates(String prefix) {
     TreeSet<String> result = new TreeSet<>();
     for (String b : BUILTINS) {
@@ -45,31 +37,62 @@ public class Main {
     return result;
   }
 
+  static String commonPrefix(TreeSet<String> names) {
+    String first = names.first();
+    String last = names.last();          // sorted: comparing first and last is enough
+    int k = 0;
+    while (k < first.length() && k < last.length() && first.charAt(k) == last.charAt(k)) k++;
+    return first.substring(0, k);
+  }
+
   // Terminal must already be in raw mode when this is called.
   static String readLine() throws IOException {
     StringBuilder buf = new StringBuilder();
+    boolean lastWasTab = false;
     while (true) {
       int ch = System.in.read();
       if (ch == -1) return buf.length() == 0 ? null : buf.toString();
 
-      if (ch == '\n' || ch == '\r') {
-        System.out.print("\r\n");
-        System.out.flush();
-        return buf.toString();
-      }
       if (ch == '\t') {
         String prefix = buf.toString();
         TreeSet<String> matches = new TreeSet<>();
         if (!prefix.isEmpty() && !prefix.contains(" ")) {
           matches = candidates(prefix);
         }
-        if (matches.size() == 1) {
+
+        if (matches.isEmpty()) {
+          System.out.print("\u0007");
+          lastWasTab = false;
+        } else if (matches.size() == 1) {
           buf.setLength(0);
           buf.append(matches.first()).append(' ');
-          System.out.print("\r\u001b[K$ " + buf);   // clear line, redraw prompt + completed text
+          System.out.print("\r\u001b[K$ " + buf);
+          lastWasTab = false;
         } else {
-          System.out.print("\u0007");               // no match, or several (next stage)
+          String lcp = commonPrefix(matches);
+          if (lcp.length() > prefix.length()) {
+            buf.setLength(0);
+            buf.append(lcp);                       // no trailing space
+            System.out.print("\r\u001b[K$ " + buf);
+            lastWasTab = false;
+          } else if (!lastWasTab) {
+            System.out.print("\u0007");            // first Tab: bell
+            lastWasTab = true;
+          } else {                                 // second Tab: list matches
+            System.out.print("\r\n" + String.join("  ", matches) + "\r\n");
+            System.out.print("$ " + buf);
+            lastWasTab = false;
+          }
         }
+        System.out.flush();
+        continue;
+      }
+      lastWasTab = false;
+
+      if (ch == '\n' || ch == '\r') {
+        System.out.print("\r\n");
+        System.out.flush();
+        return buf.toString();
       } else if (ch == 127 || ch == 8) {
         if (buf.length() > 0) {
           buf.setLength(buf.length() - 1);
@@ -125,12 +148,12 @@ public class Main {
   // ---------- main loop ----------
   public static void main(String[] args) throws Exception {
     while (true) {
-      stty("-icanon -echo min 1");     // raw mode BEFORE the prompt is shown
+      stty("-icanon -echo min 1");
       System.out.print("$ ");
       System.out.flush();
 
       String line = readLine();
-      stty("icanon echo");             // normal mode again before running the command
+      stty("icanon echo");
       if (line == null) break;
       List<String> tokens = parse(line);
       if (tokens.isEmpty()) continue;
@@ -207,5 +230,3 @@ public class Main {
     }
   }
 }
-
-
