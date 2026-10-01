@@ -3,7 +3,8 @@ import java.nio.file.*;
 import java.util.*;
 
 public class Main {
-  static final List<String> BUILTINS = List.of("cd", "complete", "echo", "exit", "pwd", "type");
+  static final List<String> BUILTINS =
+      List.of("cd", "complete", "echo", "exit", "jobs", "pwd", "type");
   static final Map<String, String> completers = new HashMap<>();   // command -> completer script
   static Path cwd = Paths.get("").toAbsolutePath();
 
@@ -66,9 +67,9 @@ public class Main {
       pb.environment().put("COMP_POINT", String.valueOf(line.length()));
       pb.redirectError(ProcessBuilder.Redirect.DISCARD);
       Process p = pb.start();
-      p.getOutputStream().close();                       // script gets empty stdin
+      p.getOutputStream().close();
       String output = new String(p.getInputStream().readAllBytes());
-      p.waitFor();                                       // wait for complete output
+      p.waitFor();
       for (String l : output.split("\n")) {
         String t = l.trim();
         if (!t.isEmpty()) result.add(t);
@@ -219,7 +220,7 @@ public class Main {
           }
         }
       }
-      default -> { }   // cd, exit, complete do nothing inside a pipeline
+      default -> { }   // cd, exit, complete, jobs do nothing inside a pipeline
     }
   }
 
@@ -343,6 +344,7 @@ public class Main {
         case "exit" -> System.exit(0);
         case "pwd" -> out.println(cwd);
         case "echo" -> out.println(String.join(" ", argv));
+        case "jobs" -> { }   // listing background jobs comes in later stages
         case "complete" -> {
           if (argv.size() >= 2 && argv.get(0).equals("-p")) {
             String script = completers.get(argv.get(1));
