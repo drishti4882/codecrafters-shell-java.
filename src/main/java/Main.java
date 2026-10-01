@@ -4,6 +4,7 @@ import java.util.*;
 
 public class Main {
   static final List<String> BUILTINS = List.of("cd", "complete", "echo", "exit", "pwd", "type");
+  static final Map<String, String> completers = new HashMap<>();   // command -> completer script
   static Path cwd = Paths.get("").toAbsolutePath();
 
   // ---------- terminal ----------
@@ -310,7 +311,20 @@ public class Main {
         case "exit" -> System.exit(0);
         case "pwd" -> out.println(cwd);
         case "echo" -> out.println(String.join(" ", argv));
-        case "complete" -> { }   // behavior comes in later stages
+        case "complete" -> {
+          if (argv.size() >= 2 && argv.get(0).equals("-p")) {
+            String script = completers.get(argv.get(1));
+            if (script == null) {
+              err.println("complete: " + argv.get(1) + ": no completion specification");
+            } else {
+              out.println("complete -C '" + script + "' " + argv.get(1));
+            }
+          } else if (argv.size() >= 3 && argv.get(0).equals("-C")) {
+            completers.put(argv.get(2), argv.get(1));   // command -> script path
+          } else if (argv.size() >= 2 && argv.get(0).equals("-r")) {
+            completers.remove(argv.get(1));
+          }
+        }
         case "cd" -> {
           String target = argv.isEmpty() ? "~" : argv.get(0);
           String expanded = target;
