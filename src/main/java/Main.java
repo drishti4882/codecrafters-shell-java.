@@ -17,49 +17,45 @@ public class Main {
     } catch (Exception ignored) {}
   }
 
+  // Terminal must already be in raw mode when this is called.
   static String readLine() throws IOException {
-    stty("-icanon -echo min 1");
-    try {
-      StringBuilder buf = new StringBuilder();
-      while (true) {
-        int ch = System.in.read();
-        if (ch == -1) return buf.length() == 0 ? null : buf.toString();
+    StringBuilder buf = new StringBuilder();
+    while (true) {
+      int ch = System.in.read();
+      if (ch == -1) return buf.length() == 0 ? null : buf.toString();
 
-        if (ch == '\n' || ch == '\r') {
-          System.out.print("\r\n");
-          System.out.flush();
-          return buf.toString();
-        }
-        if (ch == '\t') {
-          String prefix = buf.toString();
-          String match = null;
-          if (!prefix.isEmpty() && !prefix.contains(" ")) {
-            for (String b : BUILTINS) {
-              if (b.startsWith(prefix)) { match = b; break; }
-            }
-          }
-          if (match != null) {
-            buf.setLength(0);
-            buf.append(match).append(' ');
-            System.out.print("\r\u001b[K$ " + buf);   // clear line, redraw prompt + completed text
-          } else {
-            System.out.print("\u0007");
-          }
-        } else if (ch == 127 || ch == 8) {
-          if (buf.length() > 0) {
-            buf.setLength(buf.length() - 1);
-            System.out.print("\b \b");
-          }
-        } else if (ch == 4) {
-          if (buf.length() == 0) return null;
-        } else if (ch >= 32) {
-          buf.append((char) ch);
-          System.out.print((char) ch);
-        }
+      if (ch == '\n' || ch == '\r') {
+        System.out.print("\r\n");
         System.out.flush();
+        return buf.toString();
       }
-    } finally {
-      stty("icanon echo");
+      if (ch == '\t') {
+        String prefix = buf.toString();
+        String match = null;
+        if (!prefix.isEmpty() && !prefix.contains(" ")) {
+          for (String b : BUILTINS) {
+            if (b.startsWith(prefix)) { match = b; break; }
+          }
+        }
+        if (match != null) {
+          buf.setLength(0);
+          buf.append(match).append(' ');
+          System.out.print("\r\u001b[K$ " + buf);   // clear line, redraw prompt + completed text
+        } else {
+          System.out.print("\u0007");
+        }
+      } else if (ch == 127 || ch == 8) {
+        if (buf.length() > 0) {
+          buf.setLength(buf.length() - 1);
+          System.out.print("\b \b");
+        }
+      } else if (ch == 4) {
+        if (buf.length() == 0) return null;
+      } else if (ch >= 32) {
+        buf.append((char) ch);
+        System.out.print((char) ch);
+      }
+      System.out.flush();
     }
   }
 
@@ -103,10 +99,12 @@ public class Main {
   // ---------- main loop ----------
   public static void main(String[] args) throws Exception {
     while (true) {
+      stty("-icanon -echo min 1");     // raw mode BEFORE the prompt is shown
       System.out.print("$ ");
       System.out.flush();
 
       String line = readLine();
+      stty("icanon echo");             // normal mode again before running the command
       if (line == null) break;
       List<String> tokens = parse(line);
       if (tokens.isEmpty()) continue;
