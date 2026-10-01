@@ -55,6 +55,28 @@ public class Main {
     return result;
   }
 
+  // Runs a registered completer script; each non-empty stdout line is a candidate.
+  static TreeSet<String> runCompleter(String script, String cmd, String word,
+                                      String prevWord, String line) {
+    TreeSet<String> result = new TreeSet<>();
+    try {
+      ProcessBuilder pb = new ProcessBuilder(script, cmd, word, prevWord);
+      pb.directory(cwd.toFile());
+      pb.environment().put("COMP_LINE", line);
+      pb.environment().put("COMP_POINT", String.valueOf(line.length()));
+      pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+      Process p = pb.start();
+      p.getOutputStream().close();                       // script gets empty stdin
+      String output = new String(p.getInputStream().readAllBytes());
+      p.waitFor();                                       // wait for complete output
+      for (String l : output.split("\n")) {
+        String t = l.trim();
+        if (!t.isEmpty()) result.add(t);
+      }
+    } catch (Exception ignored) {}
+    return result;
+  }
+
   static String commonPrefix(TreeSet<String> names) {
     String first = names.first();
     String last = names.last();
@@ -78,8 +100,18 @@ public class Main {
         String head = isArg ? full.substring(0, sp + 1) : "";
         String prefix = isArg ? full.substring(sp + 1) : full;
         TreeSet<String> matches = new TreeSet<>();
+
         if (isArg) {
-          matches = fileCandidates(prefix);
+          String cmdName = full.substring(0, full.indexOf(' '));
+          String script = completers.get(cmdName);
+          if (script != null) {
+            String before = head.trim();
+            int ps = before.lastIndexOf(' ');
+            String prevWord = ps >= 0 ? before.substring(ps + 1) : before;
+            matches = runCompleter(script, cmdName, prefix, prevWord, full);
+          } else {
+            matches = fileCandidates(prefix);
+          }
         } else if (!prefix.isEmpty()) {
           matches = candidates(prefix);
         }
@@ -320,7 +352,7 @@ public class Main {
               out.println("complete -C '" + script + "' " + argv.get(1));
             }
           } else if (argv.size() >= 3 && argv.get(0).equals("-C")) {
-            completers.put(argv.get(2), argv.get(1));   // command -> script path
+            completers.put(argv.get(2), argv.get(1));
           } else if (argv.size() >= 2 && argv.get(0).equals("-r")) {
             completers.remove(argv.get(1));
           }
