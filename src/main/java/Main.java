@@ -3,7 +3,7 @@ import java.nio.file.*;
 import java.util.*;
 
 public class Main {
-  static final List<String> BUILTINS = List.of("cd", "echo", "exit", "pwd", "type");
+  static final List<String> BUILTINS = List.of("cd", "complete", "echo", "exit", "pwd", "type");
   static Path cwd = Paths.get("").toAbsolutePath();
 
   // ---------- terminal ----------
@@ -38,7 +38,6 @@ public class Main {
     return result;
   }
 
-  // Filenames in cwd (or in the typed directory part) starting with the typed word.
   static TreeSet<String> fileCandidates(String word) {
     TreeSet<String> result = new TreeSet<>();
     int slash = word.lastIndexOf('/');
@@ -75,8 +74,8 @@ public class Main {
         String full = buf.toString();
         int sp = full.lastIndexOf(' ');
         boolean isArg = sp >= 0;
-        String head = isArg ? full.substring(0, sp + 1) : "";   // text before the word being completed
-        String prefix = isArg ? full.substring(sp + 1) : full;   // the word being completed
+        String head = isArg ? full.substring(0, sp + 1) : "";
+        String prefix = isArg ? full.substring(sp + 1) : full;
         TreeSet<String> matches = new TreeSet<>();
         if (isArg) {
           matches = fileCandidates(prefix);
@@ -187,7 +186,7 @@ public class Main {
           }
         }
       }
-      default -> { }   // cd and exit do nothing inside a pipeline
+      default -> { }   // cd, exit, complete do nothing inside a pipeline
     }
   }
 
@@ -311,6 +310,7 @@ public class Main {
         case "exit" -> System.exit(0);
         case "pwd" -> out.println(cwd);
         case "echo" -> out.println(String.join(" ", argv));
+        case "complete" -> { }   // behavior comes in later stages
         case "cd" -> {
           String target = argv.isEmpty() ? "~" : argv.get(0);
           String expanded = target;
