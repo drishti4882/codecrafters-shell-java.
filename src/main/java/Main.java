@@ -8,6 +8,13 @@ public class Main {
   static final Map<String, String> completers = new HashMap<>();   // command -> completer script
   static Path cwd = Paths.get("").toAbsolutePath();
 
+  static class Job {
+    int num;
+    Process proc;
+    String text;   // the command as typed, including the trailing &
+  }
+  static final List<Job> jobs = new ArrayList<>();
+
   // ---------- terminal ----------
   static void stty(String flags) {
     try {
@@ -17,6 +24,43 @@ public class Main {
           .redirectError(ProcessBuilder.Redirect.DISCARD)
           .start().waitFor();
     } catch (Exception ignored) {}
+  }
+
+  // ---------- background jobs ----------
+  static void startBackground(List<String> cmd, String text) throws IOException {
+    if (findInPath(cmd.get(0)) == null) {
+      System.err.println(cmd.get(0) + ": command not found");
+      return;
+    }
+    ProcessBuilder pb = new ProcessBuilder(cmd);
+    pb.directory(cwd.toFile());
+    pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+    pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+    Process p = pb.start();
+    p.getOutputStream().close();                 // background job gets empty stdin
+
+    Job j = new Job();
+    j.num = jobs.stream().mapToInt(x -> x.num).max().orElse(0) + 1;
+    j.proc = p;
+    j.text = text;
+    jobs.add(j);
+    System.out.println("[" + j.num + "] " + p.pid());
+    System.out.flush();
+  }
+
+  static void printJobs(PrintStream out) {
+    int n = jobs.size();
+    List<Job> finished = new ArrayList<>();
+    for (int i = 0; i < n; i++) {
+      Job j = jobs.get(i);
+      boolean alive = j.proc.isAlive();
+      char marker = i == n - 1 ? '+' : (i == n - 2 ? '-' : ' ');
+      String text = alive ? j.text : j.text.replaceAll("\\s*&$", "");
+      out.println(String.format("[%d]%c  %-24s%s", j.num, marker,
+          alive ? "Running" : "Done", text));
+      if (!alive) finished.add(j);
+    }
+    jobs.removeAll(finished);
   }
 
   // ---------- completion ----------
@@ -56,7 +100,6 @@ public class Main {
     return result;
   }
 
-  // Runs a registered completer script; each non-empty stdout line is a candidate.
   static TreeSet<String> runCompleter(String script, String cmd, String word,
                                       String prevWord, String line) {
     TreeSet<String> result = new TreeSet<>();
@@ -300,6 +343,13 @@ public class Main {
       List<String> tokens = parse(line);
       if (tokens.isEmpty()) continue;
 
+      // background job: trailing "&"
+      if (tokens.get(tokens.size() - 1).equals("&")) {
+        tokens.remove(tokens.size() - 1);
+        if (!tokens.isEmpty()) startBackground(tokens, line.trim());
+        continue;
+      }
+
       if (tokens.contains("|")) {
         List<List<String>> segs = new ArrayList<>();
         List<String> seg = new ArrayList<>();
@@ -344,7 +394,7 @@ public class Main {
         case "exit" -> System.exit(0);
         case "pwd" -> out.println(cwd);
         case "echo" -> out.println(String.join(" ", argv));
-        case "jobs" -> { }   // listing background jobs comes in later stages
+        case "jobs" -> printJobs(out);
         case "complete" -> {
           if (argv.size() >= 2 && argv.get(0).equals("-p")) {
             String script = completers.get(argv.get(1));
