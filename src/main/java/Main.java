@@ -3,15 +3,13 @@ import java.nio.file.*;
 import java.util.*;
 
 public class Main {
-  static final Set<String> BUILTINS = Set.of("echo", "exit", "type", "pwd", "cd");
+  static final List<String> BUILTINS = List.of("cd", "echo", "exit", "pwd", "type");
   static Path cwd = Paths.get("").toAbsolutePath();
 
-  static void stty(String... flags) {
+  // ---------- terminal ----------
+  static void stty(String flags) {
     try {
-      List<String> c = new ArrayList<>();
-      c.add("stty");
-      c.addAll(List.of(flags));
-      new ProcessBuilder(c)
+      new ProcessBuilder("sh", "-c", "stty " + flags + " < /dev/tty 2>/dev/null || stty " + flags)
           .redirectInput(ProcessBuilder.Redirect.INHERIT)
           .redirectOutput(ProcessBuilder.Redirect.DISCARD)
           .redirectError(ProcessBuilder.Redirect.DISCARD)
@@ -20,28 +18,30 @@ public class Main {
   }
 
   static String readLine() throws IOException {
-    stty("-icanon", "-echo", "min", "1");
+    stty("-icanon -echo min 1");
     try {
       StringBuilder buf = new StringBuilder();
       while (true) {
         int ch = System.in.read();
         if (ch == -1) return buf.length() == 0 ? null : buf.toString();
+
         if (ch == '\n' || ch == '\r') {
           System.out.print("\r\n");
           System.out.flush();
           return buf.toString();
-        } else if (ch == '\t') {
+        }
+        if (ch == '\t') {
           String prefix = buf.toString();
           String match = null;
-          if (!prefix.contains(" ")) {
-            for (String b : new TreeSet<>(BUILTINS)) {
+          if (!prefix.isEmpty() && !prefix.contains(" ")) {
+            for (String b : BUILTINS) {
               if (b.startsWith(prefix)) { match = b; break; }
             }
           }
           if (match != null) {
-            String rest = match.substring(prefix.length()) + " ";
-            buf.append(rest);
-            System.out.print(rest);
+            buf.setLength(0);
+            buf.append(match).append(' ');
+            System.out.print("\r\u001b[K$ " + buf);   // clear line, redraw prompt + completed text
           } else {
             System.out.print("\u0007");
           }
@@ -52,27 +52,18 @@ public class Main {
           }
         } else if (ch == 4) {
           if (buf.length() == 0) return null;
-        } else {
+        } else if (ch >= 32) {
           buf.append((char) ch);
           System.out.print((char) ch);
         }
         System.out.flush();
       }
     } finally {
-      stty("icanon", "echo");
+      stty("icanon echo");
     }
   }
 
-  static String findInPath(String cmd) {
-    String path = System.getenv("PATH");
-    if (path == null) return null;
-    for (String dir : path.split(File.pathSeparator)) {
-      File f = new File(dir, cmd);
-      if (f.isFile() && f.canExecute()) return f.getAbsolutePath();
-    }
-    return null;
-  }
-
+  // ---------- parsing ----------
   static List<String> parse(String s) {
     List<String> tokens = new ArrayList<>();
     StringBuilder cur = new StringBuilder();
@@ -99,10 +90,22 @@ public class Main {
     return tokens;
   }
 
+  static String findInPath(String cmd) {
+    String path = System.getenv("PATH");
+    if (path == null) return null;
+    for (String dir : path.split(File.pathSeparator)) {
+      File f = new File(dir, cmd);
+      if (f.isFile() && f.canExecute()) return f.getAbsolutePath();
+    }
+    return null;
+  }
+
+  // ---------- main loop ----------
   public static void main(String[] args) throws Exception {
     while (true) {
       System.out.print("$ ");
       System.out.flush();
+
       String line = readLine();
       if (line == null) break;
       List<String> tokens = parse(line);
@@ -120,12 +123,16 @@ public class Main {
         } else if (hasNext && (t.equals("2>") || t.equals("2>>"))) {
           errApp = t.equals("2>>");
           errFile = cwd.resolve(tokens.get(++i)).toFile();
-        } else cmd.add(t);
+        } else {
+          cmd.add(t);
+        }
       }
       if (cmd.isEmpty()) continue;
 
-      PrintStream out = outFile != null ? new PrintStream(new FileOutputStream(outFile, outApp), true) : System.out;
-      PrintStream err = errFile != null ? new PrintStream(new FileOutputStream(errFile, errApp), true) : System.err;
+      PrintStream out = outFile != null
+          ? new PrintStream(new FileOutputStream(outFile, outApp), true) : System.out;
+      PrintStream err = errFile != null
+          ? new PrintStream(new FileOutputStream(errFile, errApp), true) : System.err;
 
       String name = cmd.get(0);
       List<String> argv = cmd.subList(1, cmd.size());
@@ -159,10 +166,14 @@ public class Main {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.directory(cwd.toFile());
             pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
-            pb.redirectOutput(outFile != null ? ProcessBuilder.Redirect.appendTo(outFile) : ProcessBuilder.Redirect.INHERIT);
-            pb.redirectError(errFile != null ? ProcessBuilder.Redirect.appendTo(errFile) : ProcessBuilder.Redirect.INHERIT);
+            pb.redirectOutput(outFile != null
+                ? ProcessBuilder.Redirect.appendTo(outFile) : ProcessBuilder.Redirect.INHERIT);
+            pb.redirectError(errFile != null
+                ? ProcessBuilder.Redirect.appendTo(errFile) : ProcessBuilder.Redirect.INHERIT);
             pb.start().waitFor();
-          } else err.println(name + ": command not found");
+          } else {
+            err.println(name + ": command not found");
+          }
         }
       }
       out.flush();
