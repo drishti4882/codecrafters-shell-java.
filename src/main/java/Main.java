@@ -39,7 +39,7 @@ public class Main {
 
   static String commonPrefix(TreeSet<String> names) {
     String first = names.first();
-    String last = names.last();          // sorted: comparing first and last is enough
+    String last = names.last();
     int k = 0;
     while (k < first.length() && k < last.length() && first.charAt(k) == last.charAt(k)) k++;
     return first.substring(0, k);
@@ -72,13 +72,13 @@ public class Main {
           String lcp = commonPrefix(matches);
           if (lcp.length() > prefix.length()) {
             buf.setLength(0);
-            buf.append(lcp);                       // no trailing space
+            buf.append(lcp);
             System.out.print("\r\u001b[K$ " + buf);
             lastWasTab = false;
           } else if (!lastWasTab) {
-            System.out.print("\u0007");            // first Tab: bell
+            System.out.print("\u0007");
             lastWasTab = true;
-          } else {                                 // second Tab: list matches
+          } else {
             System.out.print("\r\n" + String.join("  ", matches) + "\r\n");
             System.out.print("$ " + buf);
             lastWasTab = false;
@@ -145,6 +145,89 @@ public class Main {
     return null;
   }
 
+  // ---------- pipelines ----------
+  static void runBuiltinTo(List<String> cmd, PrintStream out, PrintStream err) {
+    String name = cmd.get(0);
+    List<String> argv = cmd.subList(1, cmd.size());
+    switch (name) {
+      case "pwd" -> out.println(cwd);
+      case "echo" -> out.println(String.join(" ", argv));
+      case "type" -> {
+        for (String a : argv) {
+          if (BUILTINS.contains(a)) out.println(a + " is a shell builtin");
+          else {
+            String f = findInPath(a);
+            out.println(f != null ? a + " is " + f : a + ": not found");
+          }
+        }
+      }
+      default -> { }   // cd and exit do nothing inside a pipeline
+    }
+  }
+
+  static void runPipeline(List<List<String>> segs) throws Exception {
+    List<Process> procs = new ArrayList<>();
+    InputStream prev = null;
+    Thread builtinThread = null;
+    Process last = null;
+
+    for (int i = 0; i < segs.size(); i++) {
+      List<String> seg = segs.get(i);
+      boolean isLast = i == segs.size() - 1;
+      String name = seg.get(0);
+
+      if (BUILTINS.contains(name)) {
+        if (prev != null) prev.close();
+        if (isLast) {
+          runBuiltinTo(seg, System.out, System.err);
+          System.out.flush();
+          prev = null;
+        } else {
+          PipedInputStream pin = new PipedInputStream(1 << 16);
+          PipedOutputStream pout = new PipedOutputStream(pin);
+          PrintStream ps = new PrintStream(pout, true);
+          final List<String> s = seg;
+          builtinThread = new Thread(() -> {
+            runBuiltinTo(s, ps, System.err);
+            ps.close();
+          });
+          builtinThread.start();
+          prev = pin;
+        }
+      } else if (findInPath(name) == null) {
+        if (prev != null) prev.close();
+        System.err.println(name + ": command not found");
+        prev = InputStream.nullInputStream();
+      } else {
+        ProcessBuilder pb = new ProcessBuilder(seg);
+        pb.directory(cwd.toFile());
+        pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+        pb.redirectInput(prev == null
+            ? ProcessBuilder.Redirect.INHERIT : ProcessBuilder.Redirect.PIPE);
+        pb.redirectOutput(isLast
+            ? ProcessBuilder.Redirect.INHERIT : ProcessBuilder.Redirect.PIPE);
+        Process p = pb.start();
+        procs.add(p);
+        if (prev != null) {
+          final InputStream in = prev;
+          Thread pump = new Thread(() -> {
+            try (OutputStream o = p.getOutputStream()) {
+              in.transferTo(o);
+            } catch (IOException ignored) {}
+          });
+          pump.setDaemon(true);
+          pump.start();
+        }
+        prev = isLast ? null : p.getInputStream();
+        if (isLast) last = p;
+      }
+    }
+
+    if (last != null) last.waitFor();
+    if (builtinThread != null) builtinThread.join();
+    for (Process p : procs) if (p != last && p.isAlive()) p.destroy();
+  }
+
   // ---------- main loop ----------
   public static void main(String[] args) throws Exception {
     while (true) {
@@ -157,6 +240,20 @@ public class Main {
       if (line == null) break;
       List<String> tokens = parse(line);
       if (tokens.isEmpty()) continue;
+
+      if (tokens.contains("|")) {
+        List<List<String>> segs = new ArrayList<>();
+        List<String> seg = new ArrayList<>();
+        for (String t : tokens) {
+          if (t.equals("|")) { segs.add(seg); seg = new ArrayList<>(); }
+          else seg.add(t);
+        }
+        segs.add(seg);
+        boolean bad = false;
+        for (List<String> s : segs) if (s.isEmpty()) bad = true;
+        if (!bad) runPipeline(segs);
+        continue;
+      }
 
       File outFile = null, errFile = null;
       boolean outApp = false, errApp = false;
