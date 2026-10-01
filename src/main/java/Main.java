@@ -1,6 +1,13 @@
-import java.io.*;
-import java.nio.file.*;
-import java.util.*;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.PrintStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.TreeSet;
 
 public class Main {
   static final List<String> BUILTINS = List.of("cd", "echo", "exit", "pwd", "type");
@@ -17,6 +24,27 @@ public class Main {
     } catch (Exception ignored) {}
   }
 
+  // Builtins plus executables in PATH whose name starts with prefix (sorted, no duplicates).
+  static TreeSet<String> candidates(String prefix) {
+    TreeSet<String> result = new TreeSet<>();
+    for (String b : BUILTINS) {
+      if (b.startsWith(prefix)) result.add(b);
+    }
+    String path = System.getenv("PATH");
+    if (path != null) {
+      for (String dir : path.split(File.pathSeparator)) {
+        File[] files = new File(dir).listFiles();
+        if (files == null) continue;
+        for (File f : files) {
+          if (f.getName().startsWith(prefix) && f.isFile() && f.canExecute()) {
+            result.add(f.getName());
+          }
+        }
+      }
+    }
+    return result;
+  }
+
   // Terminal must already be in raw mode when this is called.
   static String readLine() throws IOException {
     StringBuilder buf = new StringBuilder();
@@ -31,18 +59,16 @@ public class Main {
       }
       if (ch == '\t') {
         String prefix = buf.toString();
-        String match = null;
+        TreeSet<String> matches = new TreeSet<>();
         if (!prefix.isEmpty() && !prefix.contains(" ")) {
-          for (String b : BUILTINS) {
-            if (b.startsWith(prefix)) { match = b; break; }
-          }
+          matches = candidates(prefix);
         }
-        if (match != null) {
+        if (matches.size() == 1) {
           buf.setLength(0);
-          buf.append(match).append(' ');
+          buf.append(matches.first()).append(' ');
           System.out.print("\r\u001b[K$ " + buf);   // clear line, redraw prompt + completed text
         } else {
-          System.out.print("\u0007");
+          System.out.print("\u0007");               // no match, or several (next stage)
         }
       } else if (ch == 127 || ch == 8) {
         if (buf.length() > 0) {
@@ -181,3 +207,5 @@ public class Main {
     }
   }
 }
+
+
