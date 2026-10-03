@@ -3,451 +3,228 @@ import java.nio.file.*;
 import java.util.*;
 
 public class Main {
-  static final List<String> BUILTINS =
-      List.of("cd", "complete", "echo", "exit", "jobs", "pwd", "type");
-  static final Map<String, String> completers = new HashMap<>();   // command -> completer script
-  static Path cwd = Paths.get("").toAbsolutePath();
 
-  static class Job {
-    int num;
-    Process proc;
-    String text;   // the command as typed, including the trailing &
-  }
-  static final List<Job> jobs = new ArrayList<>();
+    static class Job {
+        final int number;
+        final Process process;
+        final String command; // without trailing '&'
 
-  // ---------- terminal ----------
-  static void stty(String flags) {
-    try {
-      new ProcessBuilder("sh", "-c", "stty " + flags + " < /dev/tty 2>/dev/null || stty " + flags)
-          .redirectInput(ProcessBuilder.Redirect.INHERIT)
-          .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-          .redirectError(ProcessBuilder.Redirect.DISCARD)
-          .start().waitFor();
-    } catch (Exception ignored) {}
-  }
-
-  // ---------- background jobs ----------
-  static void startBackground(List<String> cmd, String text) throws IOException {
-    if (findInPath(cmd.get(0)) == null) {
-      System.err.println(cmd.get(0) + ": command not found");
-      return;
-    }
-    ProcessBuilder pb = new ProcessBuilder(cmd);
-    pb.directory(cwd.toFile());
-    pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-    pb.redirectError(ProcessBuilder.Redirect.INHERIT);
-    Process p = pb.start();
-    p.getOutputStream().close();                 // background job gets empty stdin
-
-    Job j = new Job();
-    j.num = jobs.stream().mapToInt(x -> x.num).max().orElse(0) + 1;
-    j.proc = p;
-    j.text = text;
-    jobs.add(j);
-    System.out.println("[" + j.num + "] " + p.pid());
-    System.out.flush();
-  }
-
-  static void printJobs(PrintStream out) {
-    int n = jobs.size();
-    List<Job> finished = new ArrayList<>();
-    for (int i = 0; i < n; i++) {
-      Job j = jobs.get(i);
-      boolean alive = j.proc.isAlive();
-      char marker = i == n - 1 ? '+' : (i == n - 2 ? '-' : ' ');
-      String text = alive ? j.text : j.text.replaceAll("\\s*&$", "");
-      out.println(String.format("[%d]%c  %-24s%s", j.num, marker,
-          alive ? "Running" : "Done", text));
-      if (!alive) finished.add(j);
-    }
-    jobs.removeAll(finished);
-  }
-
-  // ---------- completion ----------
-  static TreeSet<String> candidates(String prefix) {
-    TreeSet<String> result = new TreeSet<>();
-    for (String b : BUILTINS) {
-      if (b.startsWith(prefix)) result.add(b);
-    }
-    String path = System.getenv("PATH");
-    if (path != null) {
-      for (String dir : path.split(File.pathSeparator)) {
-        File[] files = new File(dir).listFiles();
-        if (files == null) continue;
-        for (File f : files) {
-          if (f.getName().startsWith(prefix) && f.isFile() && f.canExecute()) {
-            result.add(f.getName());
-          }
+        Job(int number, Process process, String command) {
+            this.number = number;
+            this.process = process;
+            this.command = command;
         }
-      }
     }
-    return result;
-  }
 
-  static TreeSet<String> fileCandidates(String word) {
-    TreeSet<String> result = new TreeSet<>();
-    int slash = word.lastIndexOf('/');
-    String dirPart = slash >= 0 ? word.substring(0, slash + 1) : "";
-    String namePart = word.substring(slash + 1);
-    File dir = dirPart.isEmpty() ? cwd.toFile() : cwd.resolve(dirPart).toFile();
-    File[] files = dir.listFiles();
-    if (files == null) return result;
-    for (File f : files) {
-      if (f.getName().startsWith(namePart)) {
-        result.add(dirPart + f.getName() + (f.isDirectory() ? "/" : ""));
-      }
+    static final List<Job> jobs = new ArrayList<>();
+    static final Set<String> BUILTINS = Set.of("exit", "echo", "type", "pwd", "cd", "jobs");
+    static File cwd = new File(System.getProperty("user.dir"));
+
+    // ---------- job table helpers ----------
+
+    static char marker(int index, int size) {
+        if (index == size - 1) return '+';
+        if (index == size - 2) return '-';
+        return ' ';
     }
-    return result;
-  }
 
-  static TreeSet<String> runCompleter(String script, String cmd, String word,
-                                      String prevWord, String line) {
-    TreeSet<String> result = new TreeSet<>();
-    try {
-      ProcessBuilder pb = new ProcessBuilder(script, cmd, word, prevWord);
-      pb.directory(cwd.toFile());
-      pb.environment().put("COMP_LINE", line);
-      pb.environment().put("COMP_POINT", String.valueOf(line.length()));
-      pb.redirectError(ProcessBuilder.Redirect.DISCARD);
-      Process p = pb.start();
-      p.getOutputStream().close();
-      String output = new String(p.getInputStream().readAllBytes());
-      p.waitFor();
-      for (String l : output.split("\n")) {
-        String t = l.trim();
-        if (!t.isEmpty()) result.add(t);
-      }
-    } catch (Exception ignored) {}
-    return result;
-  }
+    static int nextJobNumber() {
+        int max = 0;
+        for (Job j : jobs) max = Math.max(max, j.number);
+        return max + 1;
+    }
 
-  static String commonPrefix(TreeSet<String> names) {
-    String first = names.first();
-    String last = names.last();
-    int k = 0;
-    while (k < first.length() && k < last.length() && first.charAt(k) == last.charAt(k)) k++;
-    return first.substring(0, k);
-  }
-
-  // Terminal must already be in raw mode when this is called.
-  static String readLine() throws IOException {
-    StringBuilder buf = new StringBuilder();
-    boolean lastWasTab = false;
-    while (true) {
-      int ch = System.in.read();
-      if (ch == -1) return buf.length() == 0 ? null : buf.toString();
-
-      if (ch == '\t') {
-        String full = buf.toString();
-        int sp = full.lastIndexOf(' ');
-        boolean isArg = sp >= 0;
-        String head = isArg ? full.substring(0, sp + 1) : "";
-        String prefix = isArg ? full.substring(sp + 1) : full;
-        TreeSet<String> matches = new TreeSet<>();
-
-        if (isArg) {
-          String cmdName = full.substring(0, full.indexOf(' '));
-          String script = completers.get(cmdName);
-          if (script != null) {
-            String before = head.trim();
-            int ps = before.lastIndexOf(' ');
-            String prevWord = ps >= 0 ? before.substring(ps + 1) : before;
-            matches = runCompleter(script, cmdName, prefix, prevWord, full);
-          } else {
-            matches = fileCandidates(prefix);
-          }
-        } else if (!prefix.isEmpty()) {
-          matches = candidates(prefix);
+    // Shared reaping logic: print "Done" for finished jobs, then remove them.
+    // Markers are computed against the table as it was BEFORE removal.
+    static void reapJobs() {
+        int n = jobs.size();
+        List<Job> finished = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            Job job = jobs.get(i);
+            if (!job.process.isAlive()) {
+                System.out.printf("[%d]%c  %-24s%s%n", job.number, marker(i, n), "Done", job.command);
+                finished.add(job);
+            }
         }
+        jobs.removeAll(finished);
+        System.out.flush();
+    }
 
-        if (matches.isEmpty()) {
-          System.out.print("\u0007");
-          lastWasTab = false;
-        } else if (matches.size() == 1) {
-          String m = matches.first();
-          buf.setLength(0);
-          buf.append(head).append(m);
-          if (!m.endsWith("/")) buf.append(' ');
-          System.out.print("\r\u001b[K$ " + buf);
-          lastWasTab = false;
-        } else {
-          String lcp = commonPrefix(matches);
-          if (lcp.length() > prefix.length()) {
-            buf.setLength(0);
-            buf.append(head).append(lcp);
-            System.out.print("\r\u001b[K$ " + buf);
-            lastWasTab = false;
-          } else if (!lastWasTab) {
-            System.out.print("\u0007");
-            lastWasTab = true;
-          } else {
-            System.out.print("\r\n" + String.join("  ", matches) + "\r\n");
-            System.out.print("$ " + buf);
-            lastWasTab = false;
-          }
+    static void builtinJobs() {
+        reapJobs(); // print Done lines first, drop finished jobs
+        int n = jobs.size();
+        for (int i = 0; i < n; i++) {
+            Job job = jobs.get(i);
+            System.out.printf("[%d]%c  %-24s%s &%n", job.number, marker(i, n), "Running", job.command);
         }
         System.out.flush();
-        continue;
-      }
-      lastWasTab = false;
-
-      if (ch == '\n' || ch == '\r') {
-        System.out.print("\r\n");
-        System.out.flush();
-        return buf.toString();
-      } else if (ch == 127 || ch == 8) {
-        if (buf.length() > 0) {
-          buf.setLength(buf.length() - 1);
-          System.out.print("\b \b");
-        }
-      } else if (ch == 4) {
-        if (buf.length() == 0) return null;
-      } else if (ch >= 32) {
-        buf.append((char) ch);
-        System.out.print((char) ch);
-      }
-      System.out.flush();
-    }
-  }
-
-  // ---------- parsing ----------
-  static List<String> parse(String s) {
-    List<String> tokens = new ArrayList<>();
-    StringBuilder cur = new StringBuilder();
-    boolean inToken = false, inSingle = false, inDouble = false;
-    for (int i = 0; i < s.length(); i++) {
-      char c = s.charAt(i);
-      if (inSingle) {
-        if (c == '\'') inSingle = false; else cur.append(c);
-      } else if (inDouble) {
-        if (c == '"') inDouble = false;
-        else if (c == '\\' && i + 1 < s.length() && "\\\"$`".indexOf(s.charAt(i + 1)) >= 0)
-          cur.append(s.charAt(++i));
-        else cur.append(c);
-      } else if (c == '\\') {
-        if (i + 1 < s.length()) cur.append(s.charAt(++i));
-        inToken = true;
-      } else if (c == '\'') { inSingle = true; inToken = true; }
-      else if (c == '"') { inDouble = true; inToken = true; }
-      else if (Character.isWhitespace(c)) {
-        if (inToken) { tokens.add(cur.toString()); cur.setLength(0); inToken = false; }
-      } else { cur.append(c); inToken = true; }
-    }
-    if (inToken) tokens.add(cur.toString());
-    return tokens;
-  }
-
-  static String findInPath(String cmd) {
-    String path = System.getenv("PATH");
-    if (path == null) return null;
-    for (String dir : path.split(File.pathSeparator)) {
-      File f = new File(dir, cmd);
-      if (f.isFile() && f.canExecute()) return f.getAbsolutePath();
-    }
-    return null;
-  }
-
-  // ---------- pipelines ----------
-  static void runBuiltinTo(List<String> cmd, PrintStream out, PrintStream err) {
-    String name = cmd.get(0);
-    List<String> argv = cmd.subList(1, cmd.size());
-    switch (name) {
-      case "pwd" -> out.println(cwd);
-      case "echo" -> out.println(String.join(" ", argv));
-      case "type" -> {
-        for (String a : argv) {
-          if (BUILTINS.contains(a)) out.println(a + " is a shell builtin");
-          else {
-            String f = findInPath(a);
-            out.println(f != null ? a + " is " + f : a + ": not found");
-          }
-        }
-      }
-      default -> { }   // cd, exit, complete, jobs do nothing inside a pipeline
-    }
-  }
-
-  static void runPipeline(List<List<String>> segs) throws Exception {
-    List<Process> procs = new ArrayList<>();
-    InputStream prev = null;
-    Thread builtinThread = null;
-    Process last = null;
-
-    for (int i = 0; i < segs.size(); i++) {
-      List<String> seg = segs.get(i);
-      boolean isLast = i == segs.size() - 1;
-      String name = seg.get(0);
-
-      if (BUILTINS.contains(name)) {
-        if (prev != null) prev.close();
-        if (isLast) {
-          runBuiltinTo(seg, System.out, System.err);
-          System.out.flush();
-          prev = null;
-        } else {
-          PipedInputStream pin = new PipedInputStream(1 << 16);
-          PipedOutputStream pout = new PipedOutputStream(pin);
-          PrintStream ps = new PrintStream(pout, true);
-          final List<String> s = seg;
-          builtinThread = new Thread(() -> {
-            runBuiltinTo(s, ps, System.err);
-            ps.close();
-          });
-          builtinThread.start();
-          prev = pin;
-        }
-      } else if (findInPath(name) == null) {
-        if (prev != null) prev.close();
-        System.err.println(name + ": command not found");
-        prev = InputStream.nullInputStream();
-      } else {
-        ProcessBuilder pb = new ProcessBuilder(seg);
-        pb.directory(cwd.toFile());
-        pb.redirectError(ProcessBuilder.Redirect.INHERIT);
-        pb.redirectInput(prev == null
-            ? ProcessBuilder.Redirect.INHERIT : ProcessBuilder.Redirect.PIPE);
-        pb.redirectOutput(isLast
-            ? ProcessBuilder.Redirect.INHERIT : ProcessBuilder.Redirect.PIPE);
-        Process p = pb.start();
-        procs.add(p);
-        if (prev != null) {
-          final InputStream in = prev;
-          Thread pump = new Thread(() -> {
-            try (OutputStream o = p.getOutputStream()) {
-              in.transferTo(o);
-            } catch (IOException ignored) {}
-          });
-          pump.setDaemon(true);
-          pump.start();
-        }
-        prev = isLast ? null : p.getInputStream();
-        if (isLast) last = p;
-      }
     }
 
-    if (last != null) last.waitFor();
-    if (builtinThread != null) builtinThread.join();
-    for (Process p : procs) if (p != last && p.isAlive()) p.destroy();
-  }
+    // ---------- main loop ----------
 
-  // ---------- main loop ----------
-  public static void main(String[] args) throws Exception {
-    while (true) {
-      stty("-icanon -echo min 1");
-      System.out.print("$ ");
-      System.out.flush();
+    public static void main(String[] args) throws Exception {
+        BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
 
-      String line = readLine();
-      stty("icanon echo");
-      if (line == null) break;
-      List<String> tokens = parse(line);
-      if (tokens.isEmpty()) continue;
+        while (true) {
+            reapJobs();               // automatic reaping before every prompt
+            System.out.print("$ ");
+            System.out.flush();
 
-      // background job: trailing "&"
-      if (tokens.get(tokens.size() - 1).equals("&")) {
-        tokens.remove(tokens.size() - 1);
-        if (!tokens.isEmpty()) startBackground(tokens, line.trim());
-        continue;
-      }
+            String line = in.readLine();
+            if (line == null) break;  // EOF
+            line = line.trim();
+            if (line.isEmpty()) continue;
 
-      if (tokens.contains("|")) {
-        List<List<String>> segs = new ArrayList<>();
-        List<String> seg = new ArrayList<>();
-        for (String t : tokens) {
-          if (t.equals("|")) { segs.add(seg); seg = new ArrayList<>(); }
-          else seg.add(t);
-        }
-        segs.add(seg);
-        boolean bad = false;
-        for (List<String> s : segs) if (s.isEmpty()) bad = true;
-        if (!bad) runPipeline(segs);
-        continue;
-      }
+            List<String> tokens = tokenize(line);
+            if (tokens.isEmpty()) continue;
 
-      File outFile = null, errFile = null;
-      boolean outApp = false, errApp = false;
-      List<String> cmd = new ArrayList<>();
-      for (int i = 0; i < tokens.size(); i++) {
-        String t = tokens.get(i);
-        boolean hasNext = i + 1 < tokens.size();
-        if (hasNext && (t.equals(">") || t.equals("1>") || t.equals(">>") || t.equals("1>>"))) {
-          outApp = t.endsWith(">>");
-          outFile = cwd.resolve(tokens.get(++i)).toFile();
-        } else if (hasNext && (t.equals("2>") || t.equals("2>>"))) {
-          errApp = t.equals("2>>");
-          errFile = cwd.resolve(tokens.get(++i)).toFile();
-        } else {
-          cmd.add(t);
-        }
-      }
-      if (cmd.isEmpty()) continue;
+            boolean background = false;
+            String commandText = line;
+            if (tokens.get(tokens.size() - 1).equals("&")) {
+                background = true;
+                tokens.remove(tokens.size() - 1);
+                commandText = line.substring(0, line.lastIndexOf('&')).trim();
+                if (tokens.isEmpty()) continue;
+            }
 
-      PrintStream out = outFile != null
-          ? new PrintStream(new FileOutputStream(outFile, outApp), true) : System.out;
-      PrintStream err = errFile != null
-          ? new PrintStream(new FileOutputStream(errFile, errApp), true) : System.err;
+            String cmd = tokens.get(0);
+            List<String> cmdArgs = tokens.subList(1, tokens.size());
 
-      String name = cmd.get(0);
-      List<String> argv = cmd.subList(1, cmd.size());
-
-      switch (name) {
-        case "exit" -> System.exit(0);
-        case "pwd" -> out.println(cwd);
-        case "echo" -> out.println(String.join(" ", argv));
-        case "jobs" -> printJobs(out);
-        case "complete" -> {
-          if (argv.size() >= 2 && argv.get(0).equals("-p")) {
-            String script = completers.get(argv.get(1));
-            if (script == null) {
-              err.println("complete: " + argv.get(1) + ": no completion specification");
+            if (BUILTINS.contains(cmd)) {
+                runBuiltin(cmd, cmdArgs);
             } else {
-              out.println("complete -C '" + script + "' " + argv.get(1));
+                runExternal(tokens, background, commandText);
             }
-          } else if (argv.size() >= 3 && argv.get(0).equals("-C")) {
-            completers.put(argv.get(2), argv.get(1));
-          } else if (argv.size() >= 2 && argv.get(0).equals("-r")) {
-            completers.remove(argv.get(1));
-          }
         }
-        case "cd" -> {
-          String target = argv.isEmpty() ? "~" : argv.get(0);
-          String expanded = target;
-          if (target.equals("~") || target.startsWith("~/")) {
-            String home = System.getenv("HOME");
-            expanded = (home == null ? "" : home) + target.substring(1);
-          }
-          Path p = cwd.resolve(expanded).normalize();
-          if (Files.isDirectory(p)) cwd = p;
-          else err.println("cd: " + target + ": No such file or directory");
-        }
-        case "type" -> {
-          for (String a : argv) {
-            if (BUILTINS.contains(a)) out.println(a + " is a shell builtin");
-            else {
-              String f = findInPath(a);
-              out.println(f != null ? a + " is " + f : a + ": not found");
-            }
-          }
-        }
-        default -> {
-          if (findInPath(name) != null) {
-            ProcessBuilder pb = new ProcessBuilder(cmd);
-            pb.directory(cwd.toFile());
-            pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
-            pb.redirectOutput(outFile != null
-                ? ProcessBuilder.Redirect.appendTo(outFile) : ProcessBuilder.Redirect.INHERIT);
-            pb.redirectError(errFile != null
-                ? ProcessBuilder.Redirect.appendTo(errFile) : ProcessBuilder.Redirect.INHERIT);
-            pb.start().waitFor();
-          } else {
-            err.println(name + ": command not found");
-          }
-        }
-      }
-      out.flush();
-      err.flush();
-      if (outFile != null) out.close();
-      if (errFile != null) err.close();
     }
-  }
+
+    // ---------- builtins ----------
+
+    static void runBuiltin(String cmd, List<String> args) {
+        switch (cmd) {
+            case "exit":
+                System.exit(args.isEmpty() ? 0 : Integer.parseInt(args.get(0)));
+                break;
+            case "echo":
+                System.out.println(String.join(" ", args));
+                break;
+            case "pwd":
+                System.out.println(cwd.getAbsolutePath());
+                break;
+            case "cd": {
+                String target = args.isEmpty() ? System.getenv("HOME") : args.get(0);
+                if (target.equals("~")) target = System.getenv("HOME");
+                File dir = new File(target);
+                if (!dir.isAbsolute()) dir = new File(cwd, target);
+                try {
+                    dir = dir.getCanonicalFile();
+                } catch (IOException ignored) {}
+                if (dir.isDirectory()) cwd = dir;
+                else System.out.println("cd: " + target + ": No such file or directory");
+                break;
+            }
+            case "type": {
+                for (String name : args) {
+                    if (BUILTINS.contains(name)) {
+                        System.out.println(name + " is a shell builtin");
+                    } else {
+                        String path = findInPath(name);
+                        if (path != null) System.out.println(name + " is " + path);
+                        else System.out.println(name + ": not found");
+                    }
+                }
+                break;
+            }
+            case "jobs":
+                builtinJobs();
+                break;
+        }
+        System.out.flush();
+    }
+
+    // ---------- external commands ----------
+
+    static void runExternal(List<String> tokens, boolean background, String commandText) {
+        String path = findInPath(tokens.get(0));
+        if (path == null) {
+            System.out.println(tokens.get(0) + ": command not found");
+            return;
+        }
+        try {
+            ProcessBuilder pb = new ProcessBuilder(tokens);
+            pb.directory(cwd);
+            pb.inheritIO();
+            System.out.flush();
+            Process p = pb.start();
+
+            if (background) {
+                int num = nextJobNumber();
+                jobs.add(new Job(num, p, commandText));
+                System.out.println("[" + num + "] " + p.pid());
+                System.out.flush();
+            } else {
+                p.waitFor();
+            }
+        } catch (IOException | InterruptedException e) {
+            System.out.println(tokens.get(0) + ": " + e.getMessage());
+        }
+    }
+
+    static String findInPath(String name) {
+        if (name.contains("/")) {
+            File f = new File(name);
+            return (f.isFile() && f.canExecute()) ? name : null;
+        }
+        String pathEnv = System.getenv("PATH");
+        if (pathEnv == null) return null;
+        for (String dir : pathEnv.split(":")) {
+            File f = new File(dir, name);
+            if (f.isFile() && f.canExecute()) return f.getAbsolutePath();
+        }
+        return null;
+    }
+
+    // ---------- tokenizer (single quotes, double quotes, backslash) ----------
+
+    static List<String> tokenize(String line) {
+        List<String> tokens = new ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        boolean inToken = false;
+        boolean inSingle = false, inDouble = false;
+
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (inSingle) {
+                if (c == '\'') inSingle = false;
+                else cur.append(c);
+            } else if (inDouble) {
+                if (c == '"') {
+                    inDouble = false;
+                } else if (c == '\\' && i + 1 < line.length()
+                        && "\"\\$`".indexOf(line.charAt(i + 1)) >= 0) {
+                    cur.append(line.charAt(++i));
+                } else {
+                    cur.append(c);
+                }
+            } else {
+                if (c == '\'') { inSingle = true; inToken = true; }
+                else if (c == '"') { inDouble = true; inToken = true; }
+                else if (c == '\\' && i + 1 < line.length()) {
+                    cur.append(line.charAt(++i));
+                    inToken = true;
+                } else if (Character.isWhitespace(c)) {
+                    if (inToken) {
+                        tokens.add(cur.toString());
+                        cur.setLength(0);
+                        inToken = false;
+                    }
+                } else {
+                    cur.append(c);
+                    inToken = true;
+                }
+            }
+        }
+        if (inToken) tokens.add(cur.toString());
+        return tokens;
+    }
 }
