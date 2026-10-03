@@ -38,7 +38,6 @@ public class Main {
         return f.isAbsolute() ? f : new File(cwd, path);
     }
 
-    // Removes redirection operators (and their targets) from tokens.
     static Redirects extractRedirects(List<String> tokens) {
         Redirects r = new Redirects();
         for (int i = 0; i < tokens.size(); i++) {
@@ -317,6 +316,13 @@ public class Main {
                 if (tokens.isEmpty()) continue;
             }
 
+            // NEW: pipeline handling
+            List<List<String>> segments = splitPipeline(tokens);
+            if (segments.size() > 1) {
+                runPipeline(segments);
+                continue;
+            }
+
             Redirects redirects = extractRedirects(tokens);
             if (tokens.isEmpty()) continue;
 
@@ -328,6 +334,95 @@ public class Main {
             } else {
                 runExternal(tokens, background, commandText, redirects);
             }
+        }
+    }
+
+    // ---------- pipelines (NEW) ----------
+
+    static List<List<String>> splitPipeline(List<String> tokens) {
+        List<List<String>> segments = new ArrayList<>();
+        List<String> cur = new ArrayList<>();
+        for (String t : tokens) {
+            if (t.equals("|")) {
+                segments.add(cur);
+                cur = new ArrayList<>();
+            } else {
+                cur.add(t);
+            }
+        }
+        segments.add(cur);
+        return segments;
+    }
+
+    static void runPipeline(List<List<String>> segments) {
+        // validate every segment first
+        for (List<String> seg : segments) {
+            if (seg.isEmpty()) {
+                realOut.println("syntax error near unexpected token `|'");
+                realOut.flush();
+                return;
+            }
+            String name = seg.get(0);
+            if (BUILTINS.contains(name)) {
+                realOut.println(name + ": builtins in pipelines are not supported yet");
+                realOut.flush();
+                return;
+            }
+            if (findInPath(name) == null) {
+                realOut.println(name + ": command not found");
+                realOut.flush();
+                return;
+            }
+        }
+
+        // redirections apply to the last command
+        List<String> lastSeg = segments.get(segments.size() - 1);
+        Redirects r = extractRedirects(lastSeg);
+        if (lastSeg.isEmpty()) return;
+
+        List<ProcessBuilder> builders = new ArrayList<>();
+        for (int i = 0; i < segments.size(); i++) {
+            ProcessBuilder pb = new ProcessBuilder(segments.get(i));
+            pb.directory(cwd);
+            pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+            if (i == 0) pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
+            if (i == segments.size() - 1) {
+                if (r.out != null) {
+                    pb.redirectOutput(r.outAppend
+                            ? ProcessBuilder.Redirect.appendTo(r.out)
+                            : ProcessBuilder.Redirect.to(r.out));
+                } else {
+                    pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+                }
+                if (r.err != null) {
+                    pb.redirectError(r.errAppend
+                            ? ProcessBuilder.Redirect.appendTo(r.err)
+                            : ProcessBuilder.Redirect.to(r.err));
+                }
+            }
+            builders.add(pb);
+        }
+
+        try {
+            System.out.flush();
+            List<Process> procs = ProcessBuilder.startPipeline(builders);
+            Process last = procs.get(procs.size() - 1);
+            last.waitFor();
+            // stop earlier commands still running (e.g. "tail -f")
+            for (int i = 0; i < procs.size() - 1; i++) {
+                Process p = procs.get(i);
+                if (p.isAlive()) p.destroy();
+            }
+            for (int i = 0; i < procs.size() - 1; i++) {
+                Process p = procs.get(i);
+                if (!p.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) {
+                    p.destroyForcibly();
+                    p.waitFor();
+                }
+            }
+        } catch (IOException | InterruptedException e) {
+            realOut.println("pipeline: " + e.getMessage());
+            realOut.flush();
         }
     }
 
@@ -433,7 +528,6 @@ public class Main {
     static void runExternal(List<String> tokens, boolean background, String commandText, Redirects r) {
         String path = findInPath(tokens.get(0));
         if (path == null) {
-            // still create/truncate redirect targets like a real shell would
             try {
                 if (r.out != null) new FileOutputStream(r.out, r.outAppend).close();
                 if (r.err != null) new FileOutputStream(r.err, r.errAppend).close();
