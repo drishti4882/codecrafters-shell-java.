@@ -875,7 +875,7 @@ public class Main {
 
     // ---------- variable expansion ----------
 
-    // NEW: given index just after '$', returns the end (exclusive) of a valid
+    // Given index just after '$', returns the end (exclusive) of a valid
     // variable name, or `start` if no valid name begins there.
     static int readVarName(String line, int start) {
         if (start >= line.length()) return start;
@@ -893,7 +893,19 @@ public class Main {
         return j;
     }
 
-    // NEW: shell variable first, then environment variable, else empty string
+    // NEW: if line[dollarIdx..] looks like ${NAME} with a valid NAME, returns
+    // the index of the closing '}', otherwise -1.
+    static int braceEnd(String line, int dollarIdx) {
+        if (dollarIdx + 1 < line.length() && line.charAt(dollarIdx + 1) == '{') {
+            int close = line.indexOf('}', dollarIdx + 2);
+            if (close > 0 && isValidIdentifier(line.substring(dollarIdx + 2, close))) {
+                return close;
+            }
+        }
+        return -1;
+    }
+
+    // shell variable first, then environment variable, else empty string
     static String lookupVar(String name) {
         String v = variables.get(name);
         if (v != null) return v;
@@ -901,7 +913,7 @@ public class Main {
         return env != null ? env : "";
     }
 
-    // ---------- tokenizer (with $VAR expansion) ----------
+    // ---------- tokenizer (with $VAR and ${VAR} expansion) ----------
 
     static List<String> tokenize(String line) {
         List<String> tokens = new ArrayList<>();
@@ -922,12 +934,18 @@ public class Main {
                         && "\"\\$`".indexOf(line.charAt(i + 1)) >= 0) {
                     cur.append(line.charAt(++i));
                 } else if (c == '$') {
-                    int end = readVarName(line, i + 1);
-                    if (end > i + 1) {
-                        cur.append(lookupVar(line.substring(i + 1, end)));
-                        i = end - 1;
+                    int b = braceEnd(line, i);
+                    if (b >= 0) { // ${NAME}
+                        cur.append(lookupVar(line.substring(i + 2, b)));
+                        i = b;
                     } else {
-                        cur.append(c);
+                        int end = readVarName(line, i + 1);
+                        if (end > i + 1) { // $NAME
+                            cur.append(lookupVar(line.substring(i + 1, end)));
+                            i = end - 1;
+                        } else {
+                            cur.append(c);
+                        }
                     }
                 } else {
                     cur.append(c);
@@ -939,17 +957,27 @@ public class Main {
                     cur.append(line.charAt(++i));
                     inToken = true;
                 } else if (c == '$') {
-                    int end = readVarName(line, i + 1);
-                    if (end > i + 1) {
-                        String value = lookupVar(line.substring(i + 1, end));
+                    int b = braceEnd(line, i);
+                    if (b >= 0) { // ${NAME}
+                        String value = lookupVar(line.substring(i + 2, b));
                         if (!value.isEmpty()) {
                             cur.append(value);
                             inToken = true;
                         }
-                        i = end - 1;
+                        i = b;
                     } else {
-                        cur.append(c);
-                        inToken = true;
+                        int end = readVarName(line, i + 1);
+                        if (end > i + 1) { // $NAME
+                            String value = lookupVar(line.substring(i + 1, end));
+                            if (!value.isEmpty()) {
+                                cur.append(value);
+                                inToken = true;
+                            }
+                            i = end - 1;
+                        } else {
+                            cur.append(c);
+                            inToken = true;
+                        }
                     }
                 } else if (Character.isWhitespace(c)) {
                     if (inToken) {
