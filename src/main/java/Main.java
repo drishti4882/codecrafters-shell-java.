@@ -60,7 +60,6 @@ public class Main {
         return max + 1;
     }
 
-    // Runs before each prompt: print only "Done" lines, then remove them.
     static void reapJobs() {
         int n = jobs.size();
         List<Job> finished = new ArrayList<>();
@@ -75,7 +74,6 @@ public class Main {
         System.out.flush();
     }
 
-    // jobs builtin: list all jobs in table order, Done or Running.
     static void builtinJobs() {
         int n = jobs.size();
         List<Job> finished = new ArrayList<>();
@@ -96,7 +94,6 @@ public class Main {
     // ---------- line input with Tab completion ----------
 
     static String readLine() throws IOException {
-        // raw mode is already set by main() before the prompt was printed
         if (!rawOk) {
             return fallbackReader.readLine();
         }
@@ -131,8 +128,32 @@ public class Main {
                 }
             }
         } finally {
-            setCooked(); // normal mode while the command runs
+            setCooked();
         }
+    }
+
+    // Candidates for filename completion. 'prefix' receives the part being completed.
+    static TreeSet<String> fileCandidates(String word) {
+        TreeSet<String> result = new TreeSet<>();
+        int slash = word.lastIndexOf('/');
+        String dirPart = slash >= 0 ? word.substring(0, slash + 1) : "";
+        String prefix = slash >= 0 ? word.substring(slash + 1) : word;
+
+        File dir;
+        if (dirPart.isEmpty()) dir = cwd;
+        else if (dirPart.startsWith("/")) dir = new File(dirPart);
+        else dir = new File(cwd, dirPart);
+
+        File[] files = dir.listFiles();
+        if (files == null) return result;
+        for (File f : files) {
+            String name = f.getName();
+            if (name.startsWith(".") && !prefix.startsWith(".")) continue;
+            if (name.startsWith(prefix)) {
+                result.add(f.isDirectory() ? name + "/" : name);
+            }
+        }
+        return result;
     }
 
     // returns true if the tab made progress (so the tab counter resets)
@@ -140,6 +161,7 @@ public class Main {
         String line = buf.toString();
         int lastSpace = line.lastIndexOf(' ');
         String word = line.substring(lastSpace + 1);
+        String prefix = word; // the part of 'word' that candidates are matched against
 
         TreeSet<String> candidates = new TreeSet<>();
 
@@ -159,7 +181,6 @@ public class Main {
                 }
             }
         } else {
-            // completing an argument: use a registered completer if any
             String[] parts = line.trim().isEmpty() ? new String[0] : line.split(" +");
             String cmd = parts.length > 0 ? parts[0] : "";
             String script = completers.get(cmd);
@@ -168,6 +189,11 @@ public class Main {
                 if (word.isEmpty()) prev = parts[parts.length - 1];
                 else prev = parts.length >= 2 ? parts[parts.length - 2] : cmd;
                 candidates.addAll(runCompleter(script, cmd, word, prev, line));
+            } else {
+                // filename completion
+                candidates = fileCandidates(word);
+                int slash = word.lastIndexOf('/');
+                prefix = slash >= 0 ? word.substring(slash + 1) : word;
             }
         }
 
@@ -179,7 +205,8 @@ public class Main {
 
         if (candidates.size() == 1) {
             String match = candidates.first();
-            String rest = match.substring(word.length()) + " ";
+            String rest = match.substring(prefix.length());
+            if (!match.endsWith("/")) rest += " ";
             buf.append(rest);
             System.out.print(rest);
             System.out.flush();
@@ -192,8 +219,8 @@ public class Main {
             while (i < lcp.length() && i < s.length() && lcp.charAt(i) == s.charAt(i)) i++;
             lcp = lcp.substring(0, i);
         }
-        if (lcp.length() > word.length()) {
-            String rest = lcp.substring(word.length());
+        if (lcp.length() > prefix.length()) {
+            String rest = lcp.substring(prefix.length());
             buf.append(rest);
             System.out.print(rest);
             System.out.flush();
@@ -233,7 +260,7 @@ public class Main {
     public static void main(String[] args) throws Exception {
         while (true) {
             reapJobs();
-            setRaw();                  // raw mode BEFORE the prompt is shown
+            setRaw();
             System.out.print("$ ");
             System.out.flush();
 
@@ -379,7 +406,7 @@ public class Main {
         return null;
     }
 
-    // ---------- tokenizer (single quotes, double quotes, backslash) ----------
+    // ---------- tokenizer ----------
 
     static List<String> tokenize(String line) {
         List<String> tokens = new ArrayList<>();
