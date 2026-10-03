@@ -17,7 +17,7 @@ public class Main {
 
     static final List<Job> jobs = new ArrayList<>();
     static final List<String> history = new ArrayList<>();
-    static int lastAppended = 0; // NEW: entries before this index are already saved to a file
+    static int lastAppended = 0; // entries before this index are already saved to a file
     static final Set<String> BUILTINS =
             Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete", "history");
     static final Map<String, String> completers = new HashMap<>();
@@ -134,6 +134,22 @@ public class Main {
 
     // ---------- history ----------
 
+    // NEW: reusable loader, used by `history -r` and by startup HISTFILE loading
+    static boolean loadHistoryFile(File f) {
+        List<String> loaded = new ArrayList<>();
+        try (BufferedReader r = new BufferedReader(new FileReader(f))) {
+            String l;
+            while ((l = r.readLine()) != null) {
+                if (!l.trim().isEmpty()) loaded.add(l);
+            }
+        } catch (IOException e) {
+            return false;
+        }
+        history.addAll(loaded);
+        lastAppended = history.size(); // loaded lines are not "new"
+        return true;
+    }
+
     static void builtinHistory(List<String> args) {
         // history -r <file>
         if (!args.isEmpty() && args.get(0).equals("-r")) {
@@ -141,19 +157,9 @@ public class Main {
                 System.err.println("history: -r: option requires an argument");
                 return;
             }
-            File f = resolve(args.get(1));
-            List<String> loaded = new ArrayList<>();
-            try (BufferedReader r = new BufferedReader(new FileReader(f))) {
-                String l;
-                while ((l = r.readLine()) != null) {
-                    if (!l.trim().isEmpty()) loaded.add(l);
-                }
-            } catch (IOException e) {
+            if (!loadHistoryFile(resolve(args.get(1)))) {
                 System.err.println("history: " + args.get(1) + ": cannot read history file");
-                return;
             }
-            history.addAll(loaded);
-            lastAppended = history.size(); // loaded lines are not "new"
             return;
         }
 
@@ -177,7 +183,7 @@ public class Main {
             return;
         }
 
-        // NEW: history -a <file>
+        // history -a <file>
         if (!args.isEmpty() && args.get(0).equals("-a")) {
             if (args.size() < 2) {
                 System.err.println("history: -a: option requires an argument");
@@ -412,6 +418,13 @@ public class Main {
     // ---------- main loop ----------
 
     public static void main(String[] args) throws Exception {
+        // NEW: load history from HISTFILE on startup
+        String histFile = System.getenv("HISTFILE");
+        if (histFile != null && !histFile.isEmpty()) {
+            File f = new File(histFile);
+            if (f.isFile()) loadHistoryFile(f);
+        }
+
         while (true) {
             reapJobs();
             setRaw();
