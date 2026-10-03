@@ -6,7 +6,7 @@ public class Main {
     static class Job {
         final int number;
         final Process process;
-        final String command; // without trailing '&'
+        final String command;
 
         Job(int number, Process process, String command) {
             this.number = number;
@@ -16,12 +16,33 @@ public class Main {
     }
 
     static final List<Job> jobs = new ArrayList<>();
-    // CHANGED: added "complete"
     static final Set<String> BUILTINS =
             Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete");
-    // NEW: command -> completer script path
     static final Map<String, String> completers = new HashMap<>();
     static File cwd = new File(System.getProperty("user.dir"));
+    static boolean rawOk = true;
+
+    // ---------- terminal mode ----------
+
+    static int stty(String args) {
+        try {
+            Process p = new ProcessBuilder("sh", "-c", "stty " + args + " < /dev/tty")
+                    .redirectErrorStream(true)
+                    .start();
+            p.getInputStream().readAllBytes();
+            return p.waitFor();
+        } catch (Exception e) {
+            return 1;
+        }
+    }
+
+    static void setRaw() {
+        if (rawOk && stty("-icanon -echo min 1") != 0) rawOk = false;
+    }
+
+    static void setCooked() {
+        if (rawOk) stty("icanon echo");
+    }
 
     // ---------- job table helpers ----------
 
@@ -37,7 +58,6 @@ public class Main {
         return max + 1;
     }
 
-    // Runs before each prompt: print only "Done" lines, then remove them.
     static void reapJobs() {
         int n = jobs.size();
         List<Job> finished = new ArrayList<>();
@@ -52,7 +72,6 @@ public class Main {
         System.out.flush();
     }
 
-    // jobs builtin: list all jobs in table order, Done or Running.
     static void builtinJobs() {
         int n = jobs.size();
         List<Job> finished = new ArrayList<>();
@@ -70,17 +89,150 @@ public class Main {
         System.out.flush();
     }
 
+    // ---------- line input with Tab completion ----------
+
+    static String readLine() throws IOException {
+        setRaw();
+        if (!rawOk) {
+            return new BufferedReader(new InputStreamReader(System.in)).readLine();
+        }
+        StringBuilder buf = new StringBuilder();
+        int tabCount = 0;
+        try {
+            while (true) {
+                int c = System.in.read();
+                if (c == -1) return buf.length() == 0 ? null : buf.toString();
+
+                if (c == '\n' || c == '\r') {
+                    System.out.print("\n");
+                    System.out.flush();
+                    return buf.toString();
+                } else if (c == 4) { // Ctrl-D
+                    if (buf.length() == 0) return null;
+                } else if (c == 127 || c == 8) {
+                    if (buf.length() > 0) {
+                        buf.setLength(buf.length() - 1);
+                        System.out.print("\b \b");
+                        System.out.flush();
+                    }
+                    tabCount = 0;
+                } else if (c == 9) {
+                    tabCount++;
+                    if (handleTab(buf, tabCount)) tabCount = 0;
+                } else if (c >= 32) {
+                    buf.append((char) c);
+                    System.out.print((char) c);
+                    System.out.flush();
+                    tabCount = 0;
+                }
+            }
+        } finally {
+            setCooked();
+        }
+    }
+
+    // returns true if the tab "made progress" (so the tab counter resets)
+    static boolean handleTab(StringBuilder buf, int tabCount) {
+        String line = buf.toString();
+        int lastSpace = line.lastIndexOf(' ');
+        String word = line.substring(lastSpace + 1);
+
+        TreeSet<String> candidates = new TreeSet<>();
+
+        if (lastSpace < 0) {
+            // completing the command name
+            for (String b : BUILTINS) if (b.startsWith(word)) candidates.add(b);
+            String pathEnv = System.getenv("PATH");
+            if (pathEnv != null && !word.isEmpty()) {
+                for (String dir : pathEnv.split(":")) {
+                    File[] files = new File(dir).listFiles();
+                    if (files == null) continue;
+                    for (File f : files) {
+                        if (f.getName().startsWith(word) && f.isFile() && f.canExecute()) {
+                            candidates.add(f.getName());
+                        }
+                    }
+                }
+            }
+        } else {
+            // completing an argument: use a registered completer if any
+            String[] parts = line.trim().isEmpty() ? new String[0] : line.split(" +");
+            String cmd = parts.length > 0 ? parts[0] : "";
+            String script = completers.get(cmd);
+            if (script != null) {
+                String prev;
+                if (word.isEmpty()) prev = parts[parts.length - 1];
+                else prev = parts.length >= 2 ? parts[parts.length - 2] : cmd;
+                candidates.addAll(runCompleter(script, cmd, word, prev, line));
+            }
+        }
+
+        if (candidates.isEmpty()) {
+            System.out.print("\u0007");
+            System.out.flush();
+            return false;
+        }
+
+        if (candidates.size() == 1) {
+            String match = candidates.first();
+            String rest = match.substring(word.length()) + " ";
+            buf.append(rest);
+            System.out.print(rest);
+            System.out.flush();
+            return true;
+        }
+
+        String lcp = candidates.first();
+        for (String s : candidates) {
+            int i = 0;
+            while (i < lcp.length() && i < s.length() && lcp.charAt(i) == s.charAt(i)) i++;
+            lcp = lcp.substring(0, i);
+        }
+        if (lcp.length() > word.length()) {
+            String rest = lcp.substring(word.length());
+            buf.append(rest);
+            System.out.print(rest);
+            System.out.flush();
+            return true;
+        }
+
+        if (tabCount == 1) {
+            System.out.print("\u0007");
+        } else {
+            System.out.print("\n" + String.join("  ", candidates) + "\n$ " + buf);
+        }
+        System.out.flush();
+        return false;
+    }
+
+    static List<String> runCompleter(String script, String cmd, String word, String prev, String line) {
+        List<String> out = new ArrayList<>();
+        try {
+            ProcessBuilder pb = new ProcessBuilder(script, cmd, word, prev);
+            pb.directory(cwd);
+            pb.environment().put("COMP_LINE", line);
+            pb.environment().put("COMP_POINT", String.valueOf(line.length()));
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            Process p = pb.start();
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String l;
+            while ((l = r.readLine()) != null) {
+                if (!l.isEmpty()) out.add(l);
+            }
+            p.waitFor();
+        } catch (Exception ignored) {}
+        return out;
+    }
+
     // ---------- main loop ----------
 
     public static void main(String[] args) throws Exception {
-        BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
-
         while (true) {
             reapJobs();
             System.out.print("$ ");
             System.out.flush();
 
-            String line = in.readLine();
+            String line = readLine();
             if (line == null) break;
             line = line.trim();
             if (line.isEmpty()) continue;
@@ -148,38 +300,28 @@ public class Main {
             case "jobs":
                 builtinJobs();
                 break;
-            case "complete": // NEW
+            case "complete":
                 builtinComplete(args);
                 break;
         }
         System.out.flush();
     }
 
-    // NEW
     static void builtinComplete(List<String> args) {
         if (args.isEmpty()) return;
-        String flag = args.get(0);
-
-        switch (flag) {
-            case "-C": // complete -C <script> <command>
-                if (args.size() >= 3) {
-                    completers.put(args.get(2), args.get(1));
-                }
+        switch (args.get(0)) {
+            case "-C":
+                if (args.size() >= 3) completers.put(args.get(2), args.get(1));
                 break;
-
-            case "-p": // complete -p <command>
+            case "-p":
                 if (args.size() >= 2) {
                     String c = args.get(1);
                     String script = completers.get(c);
-                    if (script != null) {
-                        System.out.println("complete -C '" + script + "' " + c);
-                    } else {
-                        System.out.println("complete: " + c + ": no completion specification");
-                    }
+                    if (script != null) System.out.println("complete -C '" + script + "' " + c);
+                    else System.out.println("complete: " + c + ": no completion specification");
                 }
                 break;
-
-            case "-r": // complete -r <command>
+            case "-r":
                 if (args.size() >= 2) {
                     String c = args.get(1);
                     if (completers.remove(c) == null) {
@@ -232,7 +374,7 @@ public class Main {
         return null;
     }
 
-    // ---------- tokenizer (single quotes, double quotes, backslash) ----------
+    // ---------- tokenizer ----------
 
     static List<String> tokenize(String line) {
         List<String> tokens = new ArrayList<>();
