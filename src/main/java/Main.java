@@ -16,8 +16,9 @@ public class Main {
     }
 
     static final List<Job> jobs = new ArrayList<>();
+    static final List<String> history = new ArrayList<>(); // NEW
     static final Set<String> BUILTINS =
-            Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete");
+            Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete", "history"); // CHANGED
     static final Map<String, String> completers = new HashMap<>();
     static File cwd = new File(System.getProperty("user.dir"));
     static boolean rawOk = true;
@@ -128,6 +129,29 @@ public class Main {
         }
         jobs.removeAll(finished);
         System.out.flush();
+    }
+
+    // ---------- history (NEW) ----------
+
+    static void builtinHistory(List<String> args) {
+        int total = history.size();
+        int start = 0;
+        if (!args.isEmpty()) {
+            try {
+                int n = Integer.parseInt(args.get(0));
+                if (n < 0) {
+                    System.err.println("history: " + args.get(0) + ": invalid option");
+                    return;
+                }
+                start = Math.max(0, total - n);
+            } catch (NumberFormatException e) {
+                System.err.println("history: " + args.get(0) + ": numeric argument required");
+                return;
+            }
+        }
+        for (int i = start; i < total; i++) {
+            System.out.printf("%5d  %s%n", i + 1, history.get(i));
+        }
     }
 
     // ---------- line input with Tab completion ----------
@@ -304,6 +328,8 @@ public class Main {
             line = line.trim();
             if (line.isEmpty()) continue;
 
+            history.add(line); // NEW: record before running, so "history" lists itself
+
             List<String> tokens = tokenize(line);
             if (tokens.isEmpty()) continue;
 
@@ -353,7 +379,6 @@ public class Main {
         return segments;
     }
 
-    // Copies 'in' to 'out' on a daemon thread.
     static Thread pump(InputStream in, OutputStream out, boolean closeOut) {
         Thread t = new Thread(() -> {
             try {
@@ -375,13 +400,12 @@ public class Main {
         return t;
     }
 
-    // Runs a builtin inside the shell, sending its stdout to 'dest'.
     static void runBuiltinTo(String cmd, List<String> args, OutputStream dest) {
         PrintStream ps = new PrintStream(dest, true);
         File savedCwd = cwd;
         System.setOut(ps);
         try {
-            if (!cmd.equals("exit")) runBuiltin(cmd, args); // exit/cd don't affect the shell here
+            if (!cmd.equals("exit")) runBuiltin(cmd, args);
         } finally {
             ps.flush();
             System.setOut(realOut);
@@ -390,7 +414,6 @@ public class Main {
     }
 
     static void runPipeline(List<List<String>> segments) {
-        // validate every segment first
         for (List<String> seg : segments) {
             if (seg.isEmpty()) {
                 realOut.println("syntax error near unexpected token `|'");
@@ -405,7 +428,6 @@ public class Main {
             }
         }
 
-        // redirections apply to the last command
         List<String> lastSeg = segments.get(segments.size() - 1);
         Redirects r = extractRedirects(lastSeg);
         if (lastSeg.isEmpty()) return;
@@ -413,7 +435,7 @@ public class Main {
         int n = segments.size();
         List<Process> procs = new ArrayList<>();
         Process lastProc = null;
-        InputStream prev = null; // output of the previous stage
+        InputStream prev = null;
 
         try {
             realOut.flush();
@@ -424,7 +446,6 @@ public class Main {
                 List<String> cmdArgs = seg.subList(1, seg.size());
 
                 if (BUILTINS.contains(cmd)) {
-                    // builtins ignore stdin: drain and discard the previous output
                     if (prev != null) pump(prev, OutputStream.nullOutputStream(), false);
 
                     if (last) {
@@ -475,7 +496,6 @@ public class Main {
 
             if (lastProc != null) lastProc.waitFor();
 
-            // stop anything still running (e.g. "tail -f")
             for (Process p : procs) {
                 if (p != lastProc && p.isAlive()) p.destroy();
             }
@@ -557,6 +577,9 @@ public class Main {
                 break;
             case "complete":
                 builtinComplete(args);
+                break;
+            case "history": // NEW
+                builtinHistory(args);
                 break;
         }
         System.out.flush();
