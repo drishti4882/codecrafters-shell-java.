@@ -21,7 +21,7 @@ public class Main {
     static final Set<String> BUILTINS =
             Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete", "history", "declare");
     static final Map<String, String> completers = new HashMap<>();
-    static final Map<String, String> variables = new LinkedHashMap<>(); // NEW: shell variable store
+    static final Map<String, String> variables = new LinkedHashMap<>(); // shell variable store
     static File cwd = new File(System.getProperty("user.dir"));
     static boolean rawOk = true;
     static final BufferedReader fallbackReader =
@@ -741,6 +741,20 @@ public class Main {
 
     // ---------- declare ----------
 
+    // NEW: valid identifier = [A-Za-z_][A-Za-z0-9_]*
+    static boolean isValidIdentifier(String name) {
+        if (name.isEmpty()) return false;
+        char first = name.charAt(0);
+        if (!(Character.isLetter(first) && first < 128) && first != '_') return false;
+        for (int i = 1; i < name.length(); i++) {
+            char c = name.charAt(i);
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9') || c == '_';
+            if (!ok) return false;
+        }
+        return true;
+    }
+
     // Escape characters that bash backslash-escapes inside double quotes
     static String escapeValue(String v) {
         StringBuilder sb = new StringBuilder();
@@ -774,11 +788,17 @@ public class Main {
             return;
         }
 
-        // declare NAME=VALUE [NAME=VALUE...]
+        // declare NAME=VALUE [NAME=VALUE...]  (with identifier validation)
         for (String arg : args) {
             int eq = arg.indexOf('=');
-            if (eq > 0) {
-                variables.put(arg.substring(0, eq), arg.substring(eq + 1));
+            String name = eq >= 0 ? arg.substring(0, eq) : arg;
+
+            if (!isValidIdentifier(name)) {
+                System.out.println("declare: `" + arg + "': not a valid identifier");
+                continue;
+            }
+            if (eq >= 0) {
+                variables.put(name, arg.substring(eq + 1));
             }
         }
     }
