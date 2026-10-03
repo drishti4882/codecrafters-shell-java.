@@ -16,7 +16,11 @@ public class Main {
     }
 
     static final List<Job> jobs = new ArrayList<>();
-    static final Set<String> BUILTINS = Set.of("exit", "echo", "type", "pwd", "cd", "jobs");
+    // CHANGED: added "complete"
+    static final Set<String> BUILTINS =
+            Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete");
+    // NEW: command -> completer script path
+    static final Map<String, String> completers = new HashMap<>();
     static File cwd = new File(System.getProperty("user.dir"));
 
     // ---------- job table helpers ----------
@@ -33,8 +37,7 @@ public class Main {
         return max + 1;
     }
 
-    // Automatic reaping before each prompt: print only "Done" lines, then remove.
-    // Markers are computed against the table as it was BEFORE removal.
+    // Runs before each prompt: print only "Done" lines, then remove them.
     static void reapJobs() {
         int n = jobs.size();
         List<Job> finished = new ArrayList<>();
@@ -49,12 +52,10 @@ public class Main {
         System.out.flush();
     }
 
-    // jobs builtin: list ALL jobs in table order, Done or Running, with markers
-    // from the full table. Finished jobs are removed after the listing.
+    // jobs builtin: list all jobs in table order, Done or Running.
     static void builtinJobs() {
         int n = jobs.size();
         List<Job> finished = new ArrayList<>();
-
         for (int i = 0; i < n; i++) {
             Job job = jobs.get(i);
             char m = marker(i, n);
@@ -65,7 +66,6 @@ public class Main {
                 System.out.printf("[%d]%c  %-24s%s &%n", job.number, m, "Running", job.command);
             }
         }
-
         jobs.removeAll(finished);
         System.out.flush();
     }
@@ -76,12 +76,12 @@ public class Main {
         BufferedReader in = new BufferedReader(new InputStreamReader(System.in));
 
         while (true) {
-            reapJobs();               // automatic reaping before every prompt
+            reapJobs();
             System.out.print("$ ");
             System.out.flush();
 
             String line = in.readLine();
-            if (line == null) break;  // EOF
+            if (line == null) break;
             line = line.trim();
             if (line.isEmpty()) continue;
 
@@ -148,8 +148,46 @@ public class Main {
             case "jobs":
                 builtinJobs();
                 break;
+            case "complete": // NEW
+                builtinComplete(args);
+                break;
         }
         System.out.flush();
+    }
+
+    // NEW
+    static void builtinComplete(List<String> args) {
+        if (args.isEmpty()) return;
+        String flag = args.get(0);
+
+        switch (flag) {
+            case "-C": // complete -C <script> <command>
+                if (args.size() >= 3) {
+                    completers.put(args.get(2), args.get(1));
+                }
+                break;
+
+            case "-p": // complete -p <command>
+                if (args.size() >= 2) {
+                    String c = args.get(1);
+                    String script = completers.get(c);
+                    if (script != null) {
+                        System.out.println("complete -C '" + script + "' " + c);
+                    } else {
+                        System.out.println("complete: " + c + ": no completion specification");
+                    }
+                }
+                break;
+
+            case "-r": // complete -r <command>
+                if (args.size() >= 2) {
+                    String c = args.get(1);
+                    if (completers.remove(c) == null) {
+                        System.out.println("complete: " + c + ": no completion specification");
+                    }
+                }
+                break;
+        }
     }
 
     // ---------- external commands ----------
