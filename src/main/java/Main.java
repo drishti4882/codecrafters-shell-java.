@@ -6,7 +6,7 @@ public class Main {
     static class Job {
         final int number;
         final Process process;
-        final String command;
+        final String command; // without trailing '&'
 
         Job(int number, Process process, String command) {
             this.number = number;
@@ -21,6 +21,8 @@ public class Main {
     static final Map<String, String> completers = new HashMap<>();
     static File cwd = new File(System.getProperty("user.dir"));
     static boolean rawOk = true;
+    static final BufferedReader fallbackReader =
+            new BufferedReader(new InputStreamReader(System.in));
 
     // ---------- terminal mode ----------
 
@@ -58,6 +60,7 @@ public class Main {
         return max + 1;
     }
 
+    // Runs before each prompt: print only "Done" lines, then remove them.
     static void reapJobs() {
         int n = jobs.size();
         List<Job> finished = new ArrayList<>();
@@ -72,6 +75,7 @@ public class Main {
         System.out.flush();
     }
 
+    // jobs builtin: list all jobs in table order, Done or Running.
     static void builtinJobs() {
         int n = jobs.size();
         List<Job> finished = new ArrayList<>();
@@ -92,9 +96,9 @@ public class Main {
     // ---------- line input with Tab completion ----------
 
     static String readLine() throws IOException {
-        setRaw();
+        // raw mode is already set by main() before the prompt was printed
         if (!rawOk) {
-            return new BufferedReader(new InputStreamReader(System.in)).readLine();
+            return fallbackReader.readLine();
         }
         StringBuilder buf = new StringBuilder();
         int tabCount = 0;
@@ -127,11 +131,11 @@ public class Main {
                 }
             }
         } finally {
-            setCooked();
+            setCooked(); // normal mode while the command runs
         }
     }
 
-    // returns true if the tab "made progress" (so the tab counter resets)
+    // returns true if the tab made progress (so the tab counter resets)
     static boolean handleTab(StringBuilder buf, int tabCount) {
         String line = buf.toString();
         int lastSpace = line.lastIndexOf(' ');
@@ -229,6 +233,7 @@ public class Main {
     public static void main(String[] args) throws Exception {
         while (true) {
             reapJobs();
+            setRaw();                  // raw mode BEFORE the prompt is shown
             System.out.print("$ ");
             System.out.flush();
 
@@ -374,7 +379,7 @@ public class Main {
         return null;
     }
 
-    // ---------- tokenizer ----------
+    // ---------- tokenizer (single quotes, double quotes, backslash) ----------
 
     static List<String> tokenize(String line) {
         List<String> tokens = new ArrayList<>();
