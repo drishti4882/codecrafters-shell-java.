@@ -741,7 +741,7 @@ public class Main {
 
     // ---------- declare ----------
 
-    // NEW: valid identifier = [A-Za-z_][A-Za-z0-9_]*
+    // valid identifier = [A-Za-z_][A-Za-z0-9_]*
     static boolean isValidIdentifier(String name) {
         if (name.isEmpty()) return false;
         char first = name.charAt(0);
@@ -873,7 +873,35 @@ public class Main {
         return null;
     }
 
-    // ---------- tokenizer ----------
+    // ---------- variable expansion ----------
+
+    // NEW: given index just after '$', returns the end (exclusive) of a valid
+    // variable name, or `start` if no valid name begins there.
+    static int readVarName(String line, int start) {
+        if (start >= line.length()) return start;
+        char first = line.charAt(start);
+        boolean startOk = (first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '_';
+        if (!startOk) return start;
+        int j = start + 1;
+        while (j < line.length()) {
+            char c = line.charAt(j);
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9') || c == '_';
+            if (!ok) break;
+            j++;
+        }
+        return j;
+    }
+
+    // NEW: shell variable first, then environment variable, else empty string
+    static String lookupVar(String name) {
+        String v = variables.get(name);
+        if (v != null) return v;
+        String env = System.getenv(name);
+        return env != null ? env : "";
+    }
+
+    // ---------- tokenizer (with $VAR expansion) ----------
 
     static List<String> tokenize(String line) {
         List<String> tokens = new ArrayList<>();
@@ -884,6 +912,7 @@ public class Main {
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
             if (inSingle) {
+                // no expansion inside single quotes
                 if (c == '\'') inSingle = false;
                 else cur.append(c);
             } else if (inDouble) {
@@ -892,6 +921,14 @@ public class Main {
                 } else if (c == '\\' && i + 1 < line.length()
                         && "\"\\$`".indexOf(line.charAt(i + 1)) >= 0) {
                     cur.append(line.charAt(++i));
+                } else if (c == '$') {
+                    int end = readVarName(line, i + 1);
+                    if (end > i + 1) {
+                        cur.append(lookupVar(line.substring(i + 1, end)));
+                        i = end - 1;
+                    } else {
+                        cur.append(c);
+                    }
                 } else {
                     cur.append(c);
                 }
@@ -901,6 +938,19 @@ public class Main {
                 else if (c == '\\' && i + 1 < line.length()) {
                     cur.append(line.charAt(++i));
                     inToken = true;
+                } else if (c == '$') {
+                    int end = readVarName(line, i + 1);
+                    if (end > i + 1) {
+                        String value = lookupVar(line.substring(i + 1, end));
+                        if (!value.isEmpty()) {
+                            cur.append(value);
+                            inToken = true;
+                        }
+                        i = end - 1;
+                    } else {
+                        cur.append(c);
+                        inToken = true;
+                    }
                 } else if (Character.isWhitespace(c)) {
                     if (inToken) {
                         tokens.add(cur.toString());
