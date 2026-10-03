@@ -150,6 +150,18 @@ public class Main {
         return true;
     }
 
+    // NEW: write in-memory history to HISTFILE (called on exit)
+    static void saveHistoryOnExit() {
+        String histFile = System.getenv("HISTFILE");
+        if (histFile == null || histFile.isEmpty()) return;
+        try (BufferedWriter w = new BufferedWriter(new FileWriter(histFile, false))) {
+            for (String entry : history) {
+                w.write(entry);
+                w.write("\n");
+            }
+        } catch (IOException ignored) {}
+    }
+
     static void builtinHistory(List<String> args) {
         // history -r <file>
         if (!args.isEmpty() && args.get(0).equals("-r")) {
@@ -432,7 +444,10 @@ public class Main {
             System.out.flush();
 
             String line = readLine();
-            if (line == null) break;
+            if (line == null) {
+                saveHistoryOnExit(); // NEW: Ctrl-D / EOF
+                break;
+            }
             line = line.trim();
             if (line.isEmpty()) continue;
 
@@ -648,6 +663,7 @@ public class Main {
     static void runBuiltin(String cmd, List<String> args) {
         switch (cmd) {
             case "exit":
+                saveHistoryOnExit(); // NEW
                 System.exit(args.isEmpty() ? 0 : Integer.parseInt(args.get(0)));
                 break;
             case "echo":
