@@ -17,6 +17,7 @@ public class Main {
 
     static final List<Job> jobs = new ArrayList<>();
     static final List<String> history = new ArrayList<>();
+    static int lastAppended = 0; // NEW: entries before this index are already saved to a file
     static final Set<String> BUILTINS =
             Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete", "history");
     static final Map<String, String> completers = new HashMap<>();
@@ -152,10 +153,11 @@ public class Main {
                 return;
             }
             history.addAll(loaded);
+            lastAppended = history.size(); // loaded lines are not "new"
             return;
         }
 
-        // NEW: history -w <file>
+        // history -w <file>
         if (!args.isEmpty() && args.get(0).equals("-w")) {
             if (args.size() < 2) {
                 System.err.println("history: -w: option requires an argument");
@@ -169,7 +171,29 @@ public class Main {
                 }
             } catch (IOException e) {
                 System.err.println("history: " + args.get(1) + ": cannot write history file");
+                return;
             }
+            lastAppended = history.size();
+            return;
+        }
+
+        // NEW: history -a <file>
+        if (!args.isEmpty() && args.get(0).equals("-a")) {
+            if (args.size() < 2) {
+                System.err.println("history: -a: option requires an argument");
+                return;
+            }
+            File f = resolve(args.get(1));
+            try (BufferedWriter w = new BufferedWriter(new FileWriter(f, true))) {
+                for (int i = lastAppended; i < history.size(); i++) {
+                    w.write(history.get(i));
+                    w.write("\n");
+                }
+            } catch (IOException e) {
+                System.err.println("history: " + args.get(1) + ": cannot write history file");
+                return;
+            }
+            lastAppended = history.size();
             return;
         }
 
