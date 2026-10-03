@@ -16,9 +16,9 @@ public class Main {
     }
 
     static final List<Job> jobs = new ArrayList<>();
-    static final List<String> history = new ArrayList<>(); // NEW
+    static final List<String> history = new ArrayList<>();
     static final Set<String> BUILTINS =
-            Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete", "history"); // CHANGED
+            Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete", "history");
     static final Map<String, String> completers = new HashMap<>();
     static File cwd = new File(System.getProperty("user.dir"));
     static boolean rawOk = true;
@@ -131,7 +131,7 @@ public class Main {
         System.out.flush();
     }
 
-    // ---------- history (NEW) ----------
+    // ---------- history ----------
 
     static void builtinHistory(List<String> args) {
         int total = history.size();
@@ -154,7 +154,18 @@ public class Main {
         }
     }
 
-    // ---------- line input with Tab completion ----------
+    // ---------- line input with Tab completion and history ----------
+
+    // Erases what is currently typed on screen and shows 'text' instead.
+    static void replaceLine(StringBuilder buf, String text) {
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < buf.length(); i++) out.append("\b \b");
+        out.append(text);
+        System.out.print(out);
+        System.out.flush();
+        buf.setLength(0);
+        buf.append(text);
+    }
 
     static String readLine() throws IOException {
         if (!rawOk) {
@@ -162,6 +173,8 @@ public class Main {
         }
         StringBuilder buf = new StringBuilder();
         int tabCount = 0;
+        int histIndex = history.size(); // == size means "the line being typed"
+        String saved = "";              // what was typed before pressing Up
         try {
             while (true) {
                 int c = System.in.read();
@@ -171,6 +184,27 @@ public class Main {
                     System.out.print("\n");
                     System.out.flush();
                     return buf.toString();
+                } else if (c == 27) { // escape sequence (arrow keys)
+                    int c1 = System.in.read();
+                    if (c1 == '[' || c1 == 'O') {
+                        int c2 = System.in.read();
+                        if (c2 == 'A') { // Up
+                            if (histIndex > 0) {
+                                if (histIndex == history.size()) saved = buf.toString();
+                                histIndex--;
+                                replaceLine(buf, history.get(histIndex));
+                            }
+                        } else if (c2 == 'B') { // Down
+                            if (histIndex < history.size()) {
+                                histIndex++;
+                                String next = histIndex == history.size()
+                                        ? saved : history.get(histIndex);
+                                replaceLine(buf, next);
+                            }
+                        }
+                        // C (right) and D (left) are ignored
+                    }
+                    tabCount = 0;
                 } else if (c == 4) { // Ctrl-D
                     if (buf.length() == 0) return null;
                 } else if (c == 127 || c == 8) {
@@ -328,7 +362,7 @@ public class Main {
             line = line.trim();
             if (line.isEmpty()) continue;
 
-            history.add(line); // NEW: record before running, so "history" lists itself
+            history.add(line);
 
             List<String> tokens = tokenize(line);
             if (tokens.isEmpty()) continue;
@@ -578,7 +612,7 @@ public class Main {
             case "complete":
                 builtinComplete(args);
                 break;
-            case "history": // NEW
+            case "history":
                 builtinHistory(args);
                 break;
         }
