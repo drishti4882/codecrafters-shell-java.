@@ -1,5 +1,4 @@
 import java.io.*;
-import java.nio.file.*;
 import java.util.*;
 
 public class Main {
@@ -34,7 +33,7 @@ public class Main {
         return max + 1;
     }
 
-    // Shared reaping logic: print "Done" for finished jobs, then remove them.
+    // Automatic reaping before each prompt: print only "Done" lines, then remove.
     // Markers are computed against the table as it was BEFORE removal.
     static void reapJobs() {
         int n = jobs.size();
@@ -50,13 +49,24 @@ public class Main {
         System.out.flush();
     }
 
+    // jobs builtin: list ALL jobs in table order, Done or Running, with markers
+    // from the full table. Finished jobs are removed after the listing.
     static void builtinJobs() {
-        reapJobs(); // print Done lines first, drop finished jobs
         int n = jobs.size();
+        List<Job> finished = new ArrayList<>();
+
         for (int i = 0; i < n; i++) {
             Job job = jobs.get(i);
-            System.out.printf("[%d]%c  %-24s%s &%n", job.number, marker(i, n), "Running", job.command);
+            char m = marker(i, n);
+            if (!job.process.isAlive()) {
+                System.out.printf("[%d]%c  %-24s%s%n", job.number, m, "Done", job.command);
+                finished.add(job);
+            } else {
+                System.out.printf("[%d]%c  %-24s%s &%n", job.number, m, "Running", job.command);
+            }
         }
+
+        jobs.removeAll(finished);
         System.out.flush();
     }
 
