@@ -23,6 +23,46 @@ public class Main {
     static boolean rawOk = true;
     static final BufferedReader fallbackReader =
             new BufferedReader(new InputStreamReader(System.in));
+    static final PrintStream realOut = System.out;
+    static final PrintStream realErr = System.err;
+
+    // ---------- redirection ----------
+
+    static class Redirects {
+        File out, err;
+        boolean outAppend, errAppend;
+    }
+
+    static File resolve(String path) {
+        File f = new File(path);
+        return f.isAbsolute() ? f : new File(cwd, path);
+    }
+
+    // Removes redirection operators (and their targets) from tokens.
+    static Redirects extractRedirects(List<String> tokens) {
+        Redirects r = new Redirects();
+        for (int i = 0; i < tokens.size(); i++) {
+            String t = tokens.get(i);
+            boolean isOut = t.equals(">") || t.equals("1>");
+            boolean isOutApp = t.equals(">>") || t.equals("1>>");
+            boolean isErr = t.equals("2>");
+            boolean isErrApp = t.equals("2>>");
+            if (!(isOut || isOutApp || isErr || isErrApp)) continue;
+            if (i + 1 >= tokens.size()) break;
+            File target = resolve(tokens.get(i + 1));
+            if (isOut || isOutApp) {
+                r.out = target;
+                r.outAppend = isOutApp;
+            } else {
+                r.err = target;
+                r.errAppend = isErrApp;
+            }
+            tokens.remove(i + 1);
+            tokens.remove(i);
+            i--;
+        }
+        return r;
+    }
 
     // ---------- terminal mode ----------
 
@@ -132,7 +172,6 @@ public class Main {
         }
     }
 
-    // Candidates for filename completion. 'prefix' receives the part being completed.
     static TreeSet<String> fileCandidates(String word) {
         TreeSet<String> result = new TreeSet<>();
         int slash = word.lastIndexOf('/');
@@ -156,17 +195,15 @@ public class Main {
         return result;
     }
 
-    // returns true if the tab made progress (so the tab counter resets)
     static boolean handleTab(StringBuilder buf, int tabCount) {
         String line = buf.toString();
         int lastSpace = line.lastIndexOf(' ');
         String word = line.substring(lastSpace + 1);
-        String prefix = word; // the part of 'word' that candidates are matched against
+        String prefix = word;
 
         TreeSet<String> candidates = new TreeSet<>();
 
         if (lastSpace < 0) {
-            // completing the command name
             for (String b : BUILTINS) if (b.startsWith(word)) candidates.add(b);
             String pathEnv = System.getenv("PATH");
             if (pathEnv != null && !word.isEmpty()) {
@@ -190,7 +227,6 @@ public class Main {
                 else prev = parts.length >= 2 ? parts[parts.length - 2] : cmd;
                 candidates.addAll(runCompleter(script, cmd, word, prev, line));
             } else {
-                // filename completion
                 candidates = fileCandidates(word);
                 int slash = word.lastIndexOf('/');
                 prefix = slash >= 0 ? word.substring(slash + 1) : word;
@@ -281,18 +317,45 @@ public class Main {
                 if (tokens.isEmpty()) continue;
             }
 
+            Redirects redirects = extractRedirects(tokens);
+            if (tokens.isEmpty()) continue;
+
             String cmd = tokens.get(0);
             List<String> cmdArgs = tokens.subList(1, tokens.size());
 
             if (BUILTINS.contains(cmd)) {
-                runBuiltin(cmd, cmdArgs);
+                runBuiltinRedirected(cmd, cmdArgs, redirects);
             } else {
-                runExternal(tokens, background, commandText);
+                runExternal(tokens, background, commandText, redirects);
             }
         }
     }
 
     // ---------- builtins ----------
+
+    static void runBuiltinRedirected(String cmd, List<String> args, Redirects r) {
+        PrintStream outFile = null, errFile = null;
+        try {
+            if (r.out != null) {
+                outFile = new PrintStream(new FileOutputStream(r.out, r.outAppend), true);
+                System.setOut(outFile);
+            }
+            if (r.err != null) {
+                errFile = new PrintStream(new FileOutputStream(r.err, r.errAppend), true);
+                System.setErr(errFile);
+            }
+            runBuiltin(cmd, args);
+        } catch (IOException e) {
+            realErr.println(cmd + ": " + e.getMessage());
+        } finally {
+            System.out.flush();
+            System.err.flush();
+            System.setOut(realOut);
+            System.setErr(realErr);
+            if (outFile != null) outFile.close();
+            if (errFile != null) errFile.close();
+        }
+    }
 
     static void runBuiltin(String cmd, List<String> args) {
         switch (cmd) {
@@ -314,7 +377,7 @@ public class Main {
                     dir = dir.getCanonicalFile();
                 } catch (IOException ignored) {}
                 if (dir.isDirectory()) cwd = dir;
-                else System.out.println("cd: " + target + ": No such file or directory");
+                else System.err.println("cd: " + target + ": No such file or directory");
                 break;
             }
             case "type": {
@@ -337,6 +400,7 @@ public class Main {
                 break;
         }
         System.out.flush();
+        System.err.flush();
     }
 
     static void builtinComplete(List<String> args) {
@@ -366,16 +430,45 @@ public class Main {
 
     // ---------- external commands ----------
 
-    static void runExternal(List<String> tokens, boolean background, String commandText) {
+    static void runExternal(List<String> tokens, boolean background, String commandText, Redirects r) {
         String path = findInPath(tokens.get(0));
         if (path == null) {
-            System.out.println(tokens.get(0) + ": command not found");
+            // still create/truncate redirect targets like a real shell would
+            try {
+                if (r.out != null) new FileOutputStream(r.out, r.outAppend).close();
+                if (r.err != null) new FileOutputStream(r.err, r.errAppend).close();
+            } catch (IOException ignored) {}
+            String msg = tokens.get(0) + ": command not found";
+            if (r.err != null) {
+                try (PrintStream ps = new PrintStream(new FileOutputStream(r.err, true), true)) {
+                    ps.println(msg);
+                } catch (IOException ignored) {}
+            } else {
+                realOut.println(msg);
+                realOut.flush();
+            }
             return;
         }
         try {
             ProcessBuilder pb = new ProcessBuilder(tokens);
             pb.directory(cwd);
-            pb.inheritIO();
+            pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
+
+            if (r.out != null) {
+                pb.redirectOutput(r.outAppend
+                        ? ProcessBuilder.Redirect.appendTo(r.out)
+                        : ProcessBuilder.Redirect.to(r.out));
+            } else {
+                pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+            }
+            if (r.err != null) {
+                pb.redirectError(r.errAppend
+                        ? ProcessBuilder.Redirect.appendTo(r.err)
+                        : ProcessBuilder.Redirect.to(r.err));
+            } else {
+                pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+            }
+
             System.out.flush();
             Process p = pb.start();
 
