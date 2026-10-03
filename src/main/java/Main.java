@@ -19,7 +19,7 @@ public class Main {
     static final List<String> history = new ArrayList<>();
     static int lastAppended = 0; // entries before this index are already saved to a file
     static final Set<String> BUILTINS =
-            Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete", "history");
+            Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete", "history", "declare");
     static final Map<String, String> completers = new HashMap<>();
     static File cwd = new File(System.getProperty("user.dir"));
     static boolean rawOk = true;
@@ -150,15 +150,16 @@ public class Main {
         return true;
     }
 
-    // NEW: write in-memory history to HISTFILE (called on exit)
+    // Append only the new (not yet saved) history entries to HISTFILE on exit
     static void saveHistoryOnExit() {
         String histFile = System.getenv("HISTFILE");
         if (histFile == null || histFile.isEmpty()) return;
-        try (BufferedWriter w = new BufferedWriter(new FileWriter(histFile, false))) {
-            for (String entry : history) {
-                w.write(entry);
+        try (BufferedWriter w = new BufferedWriter(new FileWriter(histFile, true))) {
+            for (int i = lastAppended; i < history.size(); i++) {
+                w.write(history.get(i));
                 w.write("\n");
             }
+            lastAppended = history.size();
         } catch (IOException ignored) {}
     }
 
@@ -704,6 +705,9 @@ public class Main {
                 break;
             case "history":
                 builtinHistory(args);
+                break;
+            case "declare":
+                // NEW: registered only; behavior comes in later stages
                 break;
         }
         System.out.flush();
