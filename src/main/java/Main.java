@@ -134,6 +134,27 @@ public class Main {
     // ---------- history ----------
 
     static void builtinHistory(List<String> args) {
+        // CHANGED: history -r <file>
+        if (!args.isEmpty() && args.get(0).equals("-r")) {
+            if (args.size() < 2) {
+                System.err.println("history: -r: option requires an argument");
+                return;
+            }
+            File f = resolve(args.get(1));
+            List<String> loaded = new ArrayList<>();
+            try (BufferedReader r = new BufferedReader(new FileReader(f))) {
+                String l;
+                while ((l = r.readLine()) != null) {
+                    if (!l.trim().isEmpty()) loaded.add(l);
+                }
+            } catch (IOException e) {
+                System.err.println("history: " + args.get(1) + ": cannot read history file");
+                return;
+            }
+            history.addAll(loaded);
+            return;
+        }
+
         int total = history.size();
         int start = 0;
         if (!args.isEmpty()) {
@@ -156,7 +177,6 @@ public class Main {
 
     // ---------- line input with Tab completion and history ----------
 
-    // Erases what is currently typed on screen and shows 'text' instead.
     static void replaceLine(StringBuilder buf, String text) {
         StringBuilder out = new StringBuilder();
         for (int i = 0; i < buf.length(); i++) out.append("\b \b");
@@ -173,8 +193,8 @@ public class Main {
         }
         StringBuilder buf = new StringBuilder();
         int tabCount = 0;
-        int histIndex = history.size(); // == size means "the line being typed"
-        String saved = "";              // what was typed before pressing Up
+        int histIndex = history.size();
+        String saved = "";
         try {
             while (true) {
                 int c = System.in.read();
@@ -202,7 +222,6 @@ public class Main {
                                 replaceLine(buf, next);
                             }
                         }
-                        // C (right) and D (left) are ignored
                     }
                     tabCount = 0;
                 } else if (c == 4) { // Ctrl-D
