@@ -21,6 +21,7 @@ public class Main {
     static final Set<String> BUILTINS =
             Set.of("exit", "echo", "type", "pwd", "cd", "jobs", "complete", "history", "declare");
     static final Map<String, String> completers = new HashMap<>();
+    static final Map<String, String> variables = new LinkedHashMap<>(); // NEW: shell variable store
     static File cwd = new File(System.getProperty("user.dir"));
     static boolean rawOk = true;
     static final BufferedReader fallbackReader =
@@ -706,7 +707,7 @@ public class Main {
                 builtinHistory(args);
                 break;
             case "declare":
-                builtinDeclare(args); // CHANGED
+                builtinDeclare(args);
                 break;
         }
         System.out.flush();
@@ -738,13 +739,47 @@ public class Main {
         }
     }
 
-    // ---------- declare ---------- (NEW)
+    // ---------- declare ----------
+
+    // Escape characters that bash backslash-escapes inside double quotes
+    static String escapeValue(String v) {
+        StringBuilder sb = new StringBuilder();
+        for (char c : v.toCharArray()) {
+            if (c == '"' || c == '\\' || c == '$' || c == '`') sb.append('\\');
+            sb.append(c);
+        }
+        return sb.toString();
+    }
 
     static void builtinDeclare(List<String> args) {
-        if (args.size() >= 2 && args.get(0).equals("-p")) {
-            // Hardcoded for this stage: no variable store yet,
-            // so every variable is reported as not found.
-            System.out.println("declare: " + args.get(1) + ": not found");
+        if (args.isEmpty()) return;
+
+        // declare -p [NAME...]
+        if (args.get(0).equals("-p")) {
+            if (args.size() == 1) {
+                for (Map.Entry<String, String> e : variables.entrySet()) {
+                    System.out.println("declare -- " + e.getKey() + "=\"" + escapeValue(e.getValue()) + "\"");
+                }
+                return;
+            }
+            for (int i = 1; i < args.size(); i++) {
+                String name = args.get(i);
+                String value = variables.get(name);
+                if (value == null) {
+                    System.out.println("declare: " + name + ": not found");
+                } else {
+                    System.out.println("declare -- " + name + "=\"" + escapeValue(value) + "\"");
+                }
+            }
+            return;
+        }
+
+        // declare NAME=VALUE [NAME=VALUE...]
+        for (String arg : args) {
+            int eq = arg.indexOf('=');
+            if (eq > 0) {
+                variables.put(arg.substring(0, eq), arg.substring(eq + 1));
+            }
         }
     }
 
