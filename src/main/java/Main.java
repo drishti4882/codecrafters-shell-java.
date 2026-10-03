@@ -316,7 +316,6 @@ public class Main {
                 if (tokens.isEmpty()) continue;
             }
 
-            // NEW: pipeline handling
             List<List<String>> segments = splitPipeline(tokens);
             if (segments.size() > 1) {
                 runPipeline(segments);
@@ -337,7 +336,7 @@ public class Main {
         }
     }
 
-    // ---------- pipelines (NEW) ----------
+    // ---------- pipelines ----------
 
     static List<List<String>> splitPipeline(List<String> tokens) {
         List<List<String>> segments = new ArrayList<>();
@@ -354,6 +353,42 @@ public class Main {
         return segments;
     }
 
+    // Copies 'in' to 'out' on a daemon thread.
+    static Thread pump(InputStream in, OutputStream out, boolean closeOut) {
+        Thread t = new Thread(() -> {
+            try {
+                byte[] b = new byte[8192];
+                int n;
+                while ((n = in.read(b)) != -1) {
+                    out.write(b, 0, n);
+                    out.flush();
+                }
+            } catch (IOException ignored) {
+            } finally {
+                if (closeOut) {
+                    try { out.close(); } catch (IOException ignored) {}
+                }
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+        return t;
+    }
+
+    // Runs a builtin inside the shell, sending its stdout to 'dest'.
+    static void runBuiltinTo(String cmd, List<String> args, OutputStream dest) {
+        PrintStream ps = new PrintStream(dest, true);
+        File savedCwd = cwd;
+        System.setOut(ps);
+        try {
+            if (!cmd.equals("exit")) runBuiltin(cmd, args); // exit/cd don't affect the shell here
+        } finally {
+            ps.flush();
+            System.setOut(realOut);
+            cwd = savedCwd;
+        }
+    }
+
     static void runPipeline(List<List<String>> segments) {
         // validate every segment first
         for (List<String> seg : segments) {
@@ -363,12 +398,7 @@ public class Main {
                 return;
             }
             String name = seg.get(0);
-            if (BUILTINS.contains(name)) {
-                realOut.println(name + ": builtins in pipelines are not supported yet");
-                realOut.flush();
-                return;
-            }
-            if (findInPath(name) == null) {
+            if (!BUILTINS.contains(name) && findInPath(name) == null) {
                 realOut.println(name + ": command not found");
                 realOut.flush();
                 return;
@@ -380,42 +410,77 @@ public class Main {
         Redirects r = extractRedirects(lastSeg);
         if (lastSeg.isEmpty()) return;
 
-        List<ProcessBuilder> builders = new ArrayList<>();
-        for (int i = 0; i < segments.size(); i++) {
-            ProcessBuilder pb = new ProcessBuilder(segments.get(i));
-            pb.directory(cwd);
-            pb.redirectError(ProcessBuilder.Redirect.INHERIT);
-            if (i == 0) pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
-            if (i == segments.size() - 1) {
-                if (r.out != null) {
-                    pb.redirectOutput(r.outAppend
-                            ? ProcessBuilder.Redirect.appendTo(r.out)
-                            : ProcessBuilder.Redirect.to(r.out));
-                } else {
-                    pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
-                }
-                if (r.err != null) {
-                    pb.redirectError(r.errAppend
-                            ? ProcessBuilder.Redirect.appendTo(r.err)
-                            : ProcessBuilder.Redirect.to(r.err));
-                }
-            }
-            builders.add(pb);
-        }
+        int n = segments.size();
+        List<Process> procs = new ArrayList<>();
+        Process lastProc = null;
+        InputStream prev = null; // output of the previous stage
 
         try {
-            System.out.flush();
-            List<Process> procs = ProcessBuilder.startPipeline(builders);
-            Process last = procs.get(procs.size() - 1);
-            last.waitFor();
-            // stop earlier commands still running (e.g. "tail -f")
-            for (int i = 0; i < procs.size() - 1; i++) {
-                Process p = procs.get(i);
-                if (p.isAlive()) p.destroy();
+            realOut.flush();
+            for (int i = 0; i < n; i++) {
+                List<String> seg = segments.get(i);
+                boolean last = (i == n - 1);
+                String cmd = seg.get(0);
+                List<String> cmdArgs = seg.subList(1, seg.size());
+
+                if (BUILTINS.contains(cmd)) {
+                    // builtins ignore stdin: drain and discard the previous output
+                    if (prev != null) pump(prev, OutputStream.nullOutputStream(), false);
+
+                    if (last) {
+                        if (r.out != null) {
+                            try (OutputStream fo = new FileOutputStream(r.out, r.outAppend)) {
+                                runBuiltinTo(cmd, cmdArgs, fo);
+                            }
+                        } else {
+                            runBuiltinTo(cmd, cmdArgs, realOut);
+                            realOut.flush();
+                        }
+                        prev = null;
+                    } else {
+                        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                        runBuiltinTo(cmd, cmdArgs, baos);
+                        prev = new ByteArrayInputStream(baos.toByteArray());
+                    }
+                } else {
+                    ProcessBuilder pb = new ProcessBuilder(seg);
+                    pb.directory(cwd);
+                    pb.redirectError(ProcessBuilder.Redirect.INHERIT);
+                    if (i == 0) pb.redirectInput(ProcessBuilder.Redirect.INHERIT);
+                    if (last) {
+                        if (r.out != null) {
+                            pb.redirectOutput(r.outAppend
+                                    ? ProcessBuilder.Redirect.appendTo(r.out)
+                                    : ProcessBuilder.Redirect.to(r.out));
+                        } else {
+                            pb.redirectOutput(ProcessBuilder.Redirect.INHERIT);
+                        }
+                        if (r.err != null) {
+                            pb.redirectError(r.errAppend
+                                    ? ProcessBuilder.Redirect.appendTo(r.err)
+                                    : ProcessBuilder.Redirect.to(r.err));
+                        }
+                    }
+                    Process p = pb.start();
+                    procs.add(p);
+                    if (prev != null) pump(prev, p.getOutputStream(), true);
+                    if (last) {
+                        lastProc = p;
+                        prev = null;
+                    } else {
+                        prev = p.getInputStream();
+                    }
+                }
             }
-            for (int i = 0; i < procs.size() - 1; i++) {
-                Process p = procs.get(i);
-                if (!p.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) {
+
+            if (lastProc != null) lastProc.waitFor();
+
+            // stop anything still running (e.g. "tail -f")
+            for (Process p : procs) {
+                if (p != lastProc && p.isAlive()) p.destroy();
+            }
+            for (Process p : procs) {
+                if (p != lastProc && !p.waitFor(1, java.util.concurrent.TimeUnit.SECONDS)) {
                     p.destroyForcibly();
                     p.waitFor();
                 }
