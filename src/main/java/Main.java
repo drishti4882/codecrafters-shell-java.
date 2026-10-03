@@ -134,7 +134,7 @@ public class Main {
     // ---------- history ----------
 
     static void builtinHistory(List<String> args) {
-        // CHANGED: history -r <file>
+        // history -r <file>
         if (!args.isEmpty() && args.get(0).equals("-r")) {
             if (args.size() < 2) {
                 System.err.println("history: -r: option requires an argument");
@@ -152,6 +152,24 @@ public class Main {
                 return;
             }
             history.addAll(loaded);
+            return;
+        }
+
+        // NEW: history -w <file>
+        if (!args.isEmpty() && args.get(0).equals("-w")) {
+            if (args.size() < 2) {
+                System.err.println("history: -w: option requires an argument");
+                return;
+            }
+            File f = resolve(args.get(1));
+            try (BufferedWriter w = new BufferedWriter(new FileWriter(f, false))) {
+                for (String entry : history) {
+                    w.write(entry);
+                    w.write("\n");
+                }
+            } catch (IOException e) {
+                System.err.println("history: " + args.get(1) + ": cannot write history file");
+            }
             return;
         }
 
